@@ -1,0 +1,4 @@
+# Minimal, version-tolerant golangci-lint config. Relies on the linter's
+# default set; expand `linters.enable` once the toolchain version is pinned.
+run:
+  timeout: 5m

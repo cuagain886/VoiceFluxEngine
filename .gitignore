@@ -1,0 +1,16 @@
+# Project tooling
+.claude/
+.agents/
+docs/
+openspec/
+
+# Go
+/bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# OS
+Thumbs.db
+Desktop.ini
