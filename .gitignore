@@ -1,8 +1,8 @@
 # Project tooling
 .claude/
 .agents/
-docs/
 openspec/
+# Note: docs/ is intentionally tracked (project convention: docs per module).
 
 # Go
 /bin/
