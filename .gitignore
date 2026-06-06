@@ -2,6 +2,8 @@
 .claude/
 .agents/
 openspec/
+docs/requirement.md
+docs/learning-plan.md
 # Note: docs/ is intentionally tracked (project convention: docs per module).
 
 # Go
