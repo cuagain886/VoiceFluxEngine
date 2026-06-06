@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package voicestream.transport.v1;
+
+option go_package = "voicestream/internal/transport/transportpb;transportpb";
+
+// FrameType identifies the logical stream a frame belongs to. The value is
+// carried in the fixed binary header's 1-byte `type` field (see frame.go).
+enum FrameType {
+  FRAME_TYPE_UNSPECIFIED = 0;
+  FRAME_TYPE_AUDIO = 1;   // payload = raw PCM bytes (NOT protobuf)
+  FRAME_TYPE_TEXT = 2;    // payload = TextPayload
+  FRAME_TYPE_CONTROL = 3; // payload = ControlPayload
+}
+
+// TextPayload carries an incremental or final transcript / token.
+message TextPayload {
+  string text = 1;
+  bool final = 2; // true = final (e.g. ASR final / utterance end)
+}
+
+// ControlKind enumerates control-plane signals.
+enum ControlKind {
+  CONTROL_KIND_UNSPECIFIED = 0;
+  CONTROL_KIND_START = 1;
+  CONTROL_KIND_STOP = 2;
+  CONTROL_KIND_BARGE_IN = 3;
+  CONTROL_KIND_ERROR = 4;
+}
+
+// ControlPayload carries a control-plane signal.
+message ControlPayload {
+  ControlKind kind = 1;
+  string detail = 2; // optional human-readable detail (e.g. error message)
+}

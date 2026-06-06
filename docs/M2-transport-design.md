@@ -1,7 +1,12 @@
 # M2 — Frame Protocol & WebSocket Transport (Design)
 
-Status: design (implementation pending) · Decision: **Option B** (real protobuf
-payloads via protoc toolchain).
+Status: **implemented** · Decision: **Option B** (real protobuf payloads via
+protoc toolchain).
+
+> As-built notes: downlink pacing is deferred to M5 (no real downlink in the
+> echo); `TCP_NODELAY` is verified (Go default), not set manually. The race
+> detector on Windows requires a modern MinGW-w64 (gcc ≥ 13; verified on 16.1.0)
+> — older 8.x fails to start the race runtime (`0xc0000139`).
 
 Maps to spec `streaming-transport` and design decisions **D1, D7, D12, D13**.
 Tasks: 2.1–2.7.

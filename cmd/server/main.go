@@ -1,13 +1,16 @@
 // Command server is the entrypoint for the voicestream real-time voice kernel.
-// At the scaffold stage (M1) it loads and validates configuration and logs
-// startup; the WebSocket transport server is wired in M2.
+// It loads/validates configuration and runs the WebSocket transport (M2). The
+// ASR->LLM->TTS pipeline replaces the echo handler in M5.
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
+	"os/signal"
 
 	"voicestream/internal/config"
+	"voicestream/internal/transport"
 )
 
 func main() {
@@ -33,5 +36,14 @@ func main() {
 		"frame", cfg.Audio.FrameDuration.String(),
 		"adapters", cfg.Adapters,
 	)
-	logger.Info("scaffold ready — transport server not yet implemented (M2)")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	srv := transport.NewServer(cfg.Server, logger)
+	if err := srv.Run(ctx); err != nil {
+		logger.Error("transport server error", "err", err)
+		os.Exit(1)
+	}
+	logger.Info("voicestream stopped")
 }
