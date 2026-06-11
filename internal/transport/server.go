@@ -23,6 +23,7 @@ type Server struct {
 	cfg     config.ServerConfig
 	log     *slog.Logger
 	handler Handler
+	routes  map[string]http.Handler
 }
 
 // NewServer returns a Server wired with the echo handler (the M2 default).
@@ -33,7 +34,13 @@ func NewServer(cfg config.ServerConfig, log *slog.Logger) *Server {
 // NewServerWithHandler returns a Server running the given per-connection
 // handler (M7+: the voice session handler).
 func NewServerWithHandler(cfg config.ServerConfig, log *slog.Logger, h Handler) *Server {
-	return &Server{cfg: cfg, log: log, handler: h}
+	return &Server{cfg: cfg, log: log, handler: h, routes: map[string]http.Handler{}}
+}
+
+// RegisterRoute mounts an extra HTTP handler (metrics, dashboards) on the
+// server's mux. Must be called before Run / HTTPHandler.
+func (s *Server) RegisterRoute(pattern string, h http.Handler) {
+	s.routes[pattern] = h
 }
 
 // Run starts the HTTP/WebSocket server and blocks until ctx is cancelled.
@@ -63,6 +70,9 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) HTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
+	for pattern, h := range s.routes {
+		mux.Handle(pattern, h)
+	}
 	if dir := s.cfg.StaticDir; dir != "" {
 		// Serve the demo client (web/). The /ws upgrade path keeps priority.
 		mux.Handle("/", http.FileServer(http.Dir(dir)))

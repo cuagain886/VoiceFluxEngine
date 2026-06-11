@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"runtime"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"voicestream/internal/adapter"
 	"voicestream/internal/config"
+	"voicestream/internal/metrics"
 	"voicestream/internal/transport"
 	"voicestream/internal/transport/transportpb"
 )
@@ -39,20 +41,29 @@ func defaultSet() adapter.Set {
 
 // rig runs a manager + HTTP server; clients dial it like browsers would.
 type rig struct {
-	t   *testing.T
-	mgr *Manager
-	url string
+	t       *testing.T
+	mgr     *Manager
+	url     string
+	httpURL string
 }
 
 func newRig(t *testing.T, ctx context.Context, cfg config.Config, set adapter.Set) *rig {
+	return newRigWithMetrics(t, ctx, cfg, set, nil)
+}
+
+func newRigWithMetrics(t *testing.T, ctx context.Context, cfg config.Config, set adapter.Set, m *metrics.M) *rig {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := NewManager(cfg, set, logger)
+	mgr := NewManager(cfg, set, logger, m)
 	go mgr.Run(ctx)
 	srv := transport.NewServerWithHandler(cfg.Server, logger, mgr.Handler())
+	if m != nil {
+		srv.RegisterRoute("/metrics", m.Registry.Handler())
+		srv.RegisterRoute("/debug/turns", m.Hub)
+	}
 	ts := httptest.NewServer(srv.HTTPHandler())
 	t.Cleanup(ts.Close)
-	return &rig{t: t, mgr: mgr, url: "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws"}
+	return &rig{t: t, mgr: mgr, url: "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws", httpURL: ts.URL}
 }
 
 // client is a synthetic browser speaking the M8 handshake protocol.
@@ -171,6 +182,20 @@ func (cl *client) replayAudio(fromSeq, toSeq uint64) {
 			Seq:  seq, TsUs: int64(seq) * 20_000, Payload: pcm,
 		})
 	}
+}
+
+func httpGetBody(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func waitFor(t *testing.T, within time.Duration, cond func() bool, msg string) {
@@ -405,6 +430,38 @@ func TestStopReclaims(t *testing.T) {
 	}
 	cl.sendControl(transportpb.ControlKind_CONTROL_KIND_STOP, "", 0, 0)
 	waitFor(t, 3*time.Second, func() bool { return r.mgr.Count() == 0 }, "STOP did not reclaim")
+}
+
+// TestMetricsExposedAfterTurn covers M9 wiring end to end: drive one full
+// turn plus a barge-in over the real stack, then scrape /metrics and check
+// the latency histograms and hygiene counters are populated.
+func TestMetricsExposedAfterTurn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	m := metrics.New()
+	r := newRigWithMetrics(t, ctx, testConfig(), defaultSet(), m)
+
+	cl := r.dial(ctx)
+	defer cl.close()
+	cl.handshake("", 1)
+	cl.sendAudio(0.5, 5)
+	cl.sendAudio(0.0, 6)
+
+	// Wait for the turn to complete (slow LLM: ~50ms/token).
+	waitFor(t, 5*time.Second, func() bool { return m.TurnsCompleted.Value() >= 1 }, "turn never recorded")
+
+	resp := httpGetBody(t, r.httpURL+"/metrics")
+	for _, want := range []string{
+		"voicestream_turns_completed_total 1",
+		"voicestream_first_response_seconds_count 1",
+		"voicestream_kernel_overhead_seconds_count 1",
+		"voicestream_sessions_active 1",
+		"voicestream_sessions_created_total 1",
+	} {
+		if !strings.Contains(resp, want) {
+			t.Errorf("metrics missing %q", want)
+		}
+	}
 }
 
 // TestIdleReclaimAndNoLeak is the 8.4 soak gate: churn a batch of sessions,

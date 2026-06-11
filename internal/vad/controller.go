@@ -83,6 +83,9 @@ func (c *Controller) ResponseDone() { c.apply(ResponseDone) }
 // State exposes the conversation state (for metrics and the demo client).
 func (c *Controller) State() State { return c.machine.State() }
 
+// IllegalEvents exposes how many undefined transitions were rejected.
+func (c *Controller) IllegalEvents() uint64 { return c.machine.Illegal() }
+
 func (c *Controller) apply(ev Event) {
 	act, err := c.machine.Apply(ev)
 	if err != nil {

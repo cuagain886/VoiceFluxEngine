@@ -13,6 +13,7 @@ import (
 
 	"voicestream/internal/adapter"
 	"voicestream/internal/config"
+	"voicestream/internal/metrics"
 	"voicestream/internal/transport"
 	"voicestream/internal/transport/transportpb"
 )
@@ -25,19 +26,67 @@ type Manager struct {
 	cfg config.Config
 	set adapter.Set
 	log *slog.Logger
+	m   *metrics.M // nil = instrumentation disabled
 
 	mu       sync.Mutex
 	sessions map[string]*Session
 
-	staleEpochClaims atomic.Uint64
+	staleEpochClaims  atomic.Uint64
+	sessionsCreated   atomic.Uint64
+	sessionsReclaimed atomic.Uint64
 }
 
-// NewManager builds a manager; call Run to start the idle reaper.
-func NewManager(cfg config.Config, set adapter.Set, logger *slog.Logger) *Manager {
+// NewManager builds a manager; call Run to start the idle reaper. m may be
+// nil to disable metrics (tests).
+func NewManager(cfg config.Config, set adapter.Set, logger *slog.Logger, m *metrics.M) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Manager{cfg: cfg, set: set, log: logger, sessions: map[string]*Session{}}
+	mgr := &Manager{cfg: cfg, set: set, log: logger, m: m, sessions: map[string]*Session{}}
+	if m != nil {
+		mgr.registerGauges()
+	}
+	return mgr
+}
+
+// registerGauges exposes scrape-time values: live session count plus the
+// frame-hygiene totals (live sessions summed on the fly + totals accumulated
+// from reclaimed ones, so counters stay monotonic across session churn).
+func (mgr *Manager) registerGauges() {
+	r := mgr.m.Registry
+	r.NewGaugeFunc("voicestream_sessions_active", "Live sessions.", func() float64 {
+		return float64(mgr.Count())
+	})
+	r.NewGaugeFunc("voicestream_sessions_created_total", "Sessions ever created.", func() float64 {
+		return float64(mgr.sessionsCreated.Load())
+	})
+	r.NewGaugeFunc("voicestream_sessions_reclaimed_total", "Sessions reclaimed.", func() float64 {
+		return float64(mgr.sessionsReclaimed.Load())
+	})
+	r.NewGaugeFunc("voicestream_stale_epoch_claims_total", "Rejected stale reconnect claims.", func() float64 {
+		return float64(mgr.staleEpochClaims.Load())
+	})
+	sum := func(acc *atomic.Uint64, live func(*Session) uint64) func() float64 {
+		return func() float64 {
+			total := acc.Load()
+			for _, s := range mgr.snapshot() {
+				total += live(s)
+			}
+			return float64(total)
+		}
+	}
+	r.NewGaugeFunc("voicestream_ingress_dropped_frames_total", "Uplink frames shed by the ingress ring.",
+		sum(&mgr.m.AccIngressDropped, func(s *Session) uint64 { return s.pipe.IngressDropped() }))
+	r.NewGaugeFunc("voicestream_egress_dropped_frames_total", "Downlink frames shed by the egress ring.",
+		sum(&mgr.m.AccEgressDropped, func(s *Session) uint64 { return s.pipe.EgressDropped() }))
+	r.NewGaugeFunc("voicestream_dup_frames_total", "Replayed uplink frames dropped by dedup.",
+		sum(&mgr.m.AccDupFrames, func(s *Session) uint64 { return s.dupFrames.Load() }))
+	r.NewGaugeFunc("voicestream_stale_frames_total", "Frames from superseded attachments dropped.",
+		sum(&mgr.m.AccStaleFrames, func(s *Session) uint64 { return s.staleFrames.Load() }))
+	r.NewGaugeFunc("voicestream_subtitle_dropped_total", "TEXT/CONTROL frames shed under slow clients.",
+		sum(&mgr.m.AccSubtitleDrops, func(s *Session) uint64 { return s.subtitleDrops.Load() }))
+	r.NewGaugeFunc("voicestream_illegal_transitions_total", "State-machine events rejected as illegal.",
+		sum(&mgr.m.AccIllegalEvents, func(s *Session) uint64 { return s.ctrl.IllegalEvents() }))
 }
 
 // Run drives the idle reaper until ctx ends, then reclaims everything.
@@ -154,6 +203,7 @@ func (m *Manager) resolve(start *transportpb.ControlPayload) (*Session, string, 
 		return nil, "", err
 	}
 	m.sessions[id] = s
+	m.sessionsCreated.Add(1)
 	detail := "created"
 	if start.SessionId != "" {
 		detail = "expired; new session created"
@@ -196,6 +246,17 @@ func (m *Manager) reclaim(s *Session, reason string) {
 	delete(m.sessions, s.id)
 	m.mu.Unlock()
 	s.close()
+	m.sessionsReclaimed.Add(1)
+	if m.m != nil {
+		// Fold the dead session's counters into the process totals so the
+		// exported counters stay monotonic across churn.
+		m.m.AccIngressDropped.Add(s.pipe.IngressDropped())
+		m.m.AccEgressDropped.Add(s.pipe.EgressDropped())
+		m.m.AccDupFrames.Add(s.dupFrames.Load())
+		m.m.AccStaleFrames.Add(s.staleFrames.Load())
+		m.m.AccSubtitleDrops.Add(s.subtitleDrops.Load())
+		m.m.AccIllegalEvents.Add(s.ctrl.IllegalEvents())
+	}
 	m.log.Info("session reclaimed", "id", s.id, "reason", reason)
 }
 

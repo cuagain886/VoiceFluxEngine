@@ -11,6 +11,7 @@ import (
 
 	"voicestream/internal/adapter"
 	"voicestream/internal/config"
+	"voicestream/internal/metrics"
 	"voicestream/internal/session"
 	"voicestream/internal/transport"
 
@@ -53,10 +54,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	mgr := session.NewManager(cfg, set, logger)
+	m := metrics.New()
+	mgr := session.NewManager(cfg, set, logger, m)
 	go mgr.Run(ctx) // idle reaper; reclaims all sessions on shutdown
 
 	srv := transport.NewServerWithHandler(cfg.Server, logger, mgr.Handler())
+	srv.RegisterRoute("/metrics", m.Registry.Handler()) // Prometheus scrape
+	srv.RegisterRoute("/debug/turns", m.Hub)            // dashboard SSE feed
 	if err := srv.Run(ctx); err != nil {
 		logger.Error("transport server error", "err", err)
 		os.Exit(1)

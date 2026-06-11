@@ -24,12 +24,15 @@ type TurnStats struct {
 	ASRFinalAt      time.Time // final transcript available
 	LLMStartAt      time.Time // LLM stream opened
 	LLMFirstTokenAt time.Time // first token out of the LLM
+	LLMLastTokenAt  time.Time // last token out of the LLM (full-span end)
 	TTSStartAt      time.Time // first token handed to TTS
 	TTSFirstFrameAt time.Time // first synthesized frame in the egress ring
+	TTSLastFrameAt  time.Time // last synthesized frame (full-span end)
 	EndedAt         time.Time
 
-	Cancelled     bool
-	FlushedFrames int // egress frames drained by a barge-in flush
+	Cancelled      bool
+	FlushedFrames  int           // egress frames drained by a barge-in flush
+	BargeInLatency time.Duration // cancel requested -> sub-chain down + flushed
 }
 
 // FirstResponse is the user-perceived latency: speech end to first downlink
@@ -124,9 +127,11 @@ func (p *Pipeline) startTurn(ctx context.Context, u utterance) *turnHandle {
 		defer wg.Done()
 		defer close(ttsIn)
 		for tok := range tokens {
+			now := time.Now()
 			if h.stats.LLMFirstTokenAt.IsZero() {
-				h.stats.LLMFirstTokenAt = time.Now()
+				h.stats.LLMFirstTokenAt = now
 			}
+			h.stats.LLMLastTokenAt = now
 			reply.WriteString(tok.Text)
 			if p.OnToken != nil {
 				p.OnToken(tok)
@@ -156,9 +161,11 @@ func (p *Pipeline) startTurn(ctx context.Context, u utterance) *turnHandle {
 		defer wg.Done()
 		for f := range ttsOut {
 			p.egress.push(f)
+			now := time.Now()
 			if h.stats.TTSFirstFrameAt.IsZero() {
-				h.stats.TTSFirstFrameAt = time.Now()
+				h.stats.TTSFirstFrameAt = now
 			}
+			h.stats.TTSLastFrameAt = now
 		}
 	}()
 
@@ -193,10 +200,12 @@ func (p *Pipeline) finishTurn(h *turnHandle) {
 // flush the in-flight downlink audio so the egress holds nothing stale. The
 // ASR loop is untouched — it keeps listening throughout.
 func (p *Pipeline) cancelTurn(h *turnHandle) {
+	begin := time.Now()
 	h.cancel()
 	<-h.done
 	h.stats.Cancelled = true
 	h.stats.FlushedFrames = p.egress.drain()
+	h.stats.BargeInLatency = time.Since(begin)
 	// What the agent managed to say still happened; keep it in history so
 	// the next turn's context reflects reality.
 	p.appendHistory(h.stats.Prompt, h.stats.Reply)

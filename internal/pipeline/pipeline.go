@@ -57,6 +57,11 @@ type Pipeline struct {
 	OnTurnStart func()
 	OnTurnEnd   func(cancelled bool)
 
+	// OnTurnStats, when set before Run, receives every published turn's
+	// measurements (M9 metrics export). Orchestrator goroutine; fast,
+	// non-blocking.
+	OnTurnStats func(TurnStats)
+
 	history []adapter.Message // orchestrator-goroutine only
 
 	statsMu sync.Mutex
@@ -141,6 +146,9 @@ func (p *Pipeline) publish(s TurnStats) {
 	p.statsMu.Lock()
 	p.last, p.hasLast = s, true
 	p.statsMu.Unlock()
+	if p.OnTurnStats != nil {
+		p.OnTurnStats(s)
+	}
 	p.logger.Debug("turn complete",
 		"prompt", s.Prompt,
 		"first_response", s.FirstResponse(),

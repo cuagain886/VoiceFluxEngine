@@ -100,6 +100,9 @@ func newSession(m *Manager, id string) (*Session, error) {
 			s.enqueueControl(transportpb.ControlKind_CONTROL_KIND_BARGE_IN)
 		}
 	}
+	if m.m != nil {
+		p.OnTurnStats = func(ts pipeline.TurnStats) { m.m.RecordTurn(s.id, ts) }
+	}
 
 	s.runCtx, s.runCancel = context.WithCancel(context.Background())
 	go func() {
