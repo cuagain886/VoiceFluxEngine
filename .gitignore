@@ -16,3 +16,5 @@ coverage.*
 # OS
 Thumbs.db
 Desktop.ini
+docs/requirement-zh.md
+docs/learning-plan-zh.md
