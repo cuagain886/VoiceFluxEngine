@@ -20,6 +20,7 @@ type Config struct {
 	Server      ServerConfig      `yaml:"server"`
 	Audio       AudioConfig       `yaml:"audio"`
 	RingBuf     RingBufConfig     `yaml:"ring_buffer"`
+	Pipeline    PipelineConfig    `yaml:"pipeline"`
 	VAD         VADConfig         `yaml:"vad"`
 	Session     SessionConfig     `yaml:"session"`
 	Adapters    AdaptersConfig    `yaml:"adapters"`
@@ -50,6 +51,16 @@ type RingBufConfig struct {
 	EgressCapacity  int    `yaml:"egress_capacity"`  // TTS -> transport
 	IngressPolicy   string `yaml:"ingress_policy"`
 	EgressPolicy    string `yaml:"egress_policy"`
+}
+
+// PipelineConfig bounds the text-side channels between stages. These caps are
+// the memory bound AND the backpressure mechanism: a full channel blocks its
+// upstream stage (text must not be lost), propagating pressure back until it
+// surfaces as drop-oldest at the audio ingress ring.
+type PipelineConfig struct {
+	TokenChanCap      int `yaml:"token_chan_cap"`      // LLM -> TTS tokens
+	TranscriptChanCap int `yaml:"transcript_chan_cap"` // ASR finals -> orchestrator
+	AudioChanCap      int `yaml:"audio_chan_cap"`      // per-stage audio hop buffers
 }
 
 // VADConfig holds the inline energy-VAD thresholds and jitter filters.
@@ -114,6 +125,11 @@ func Default() Config {
 			EgressCapacity:  64,
 			IngressPolicy:   "drop_oldest",
 			EgressPolicy:    "drop_oldest",
+		},
+		Pipeline: PipelineConfig{
+			TokenChanCap:      32,
+			TranscriptChanCap: 2,
+			AudioChanCap:      8,
 		},
 		VAD: VADConfig{
 			EnergyThreshold: 0.01,
@@ -193,6 +209,9 @@ func (c Config) Validate() error {
 	}
 	if _, err := ringbuf.ParsePolicy(c.RingBuf.IngressPolicy); err != nil {
 		return fmt.Errorf("ring_buffer.ingress_policy: %w", err)
+	}
+	if c.Pipeline.TokenChanCap <= 0 || c.Pipeline.TranscriptChanCap <= 0 || c.Pipeline.AudioChanCap <= 0 {
+		return fmt.Errorf("pipeline channel caps must be positive, got %+v", c.Pipeline)
 	}
 	if _, err := ringbuf.ParsePolicy(c.RingBuf.EgressPolicy); err != nil {
 		return fmt.Errorf("ring_buffer.egress_policy: %w", err)
