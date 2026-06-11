@@ -168,6 +168,9 @@ func (p *Pipeline) startTurn(ctx context.Context, u utterance) *turnHandle {
 		h.stats.EndedAt = time.Now()
 		close(h.done)
 	}()
+	if p.OnTurnStart != nil {
+		p.OnTurnStart()
+	}
 	return h
 }
 
@@ -180,6 +183,9 @@ func (p *Pipeline) finishTurn(h *turnHandle) {
 	}
 	p.appendHistory(h.stats.Prompt, h.stats.Reply)
 	p.publish(h.stats)
+	if p.OnTurnEnd != nil {
+		p.OnTurnEnd(false)
+	}
 }
 
 // cancelTurn is the barge-in path (task 5.4): cancel the sub-chain, wait for
@@ -195,6 +201,9 @@ func (p *Pipeline) cancelTurn(h *turnHandle) {
 	// the next turn's context reflects reality.
 	p.appendHistory(h.stats.Prompt, h.stats.Reply)
 	p.publish(h.stats)
+	if p.OnTurnEnd != nil {
+		p.OnTurnEnd(true)
+	}
 }
 
 func (p *Pipeline) appendHistory(prompt, reply string) {

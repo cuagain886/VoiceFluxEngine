@@ -51,6 +51,12 @@ type Pipeline struct {
 	OnTranscript func(adapter.Transcript)
 	OnToken      func(adapter.Token)
 
+	// OnTurnStart and OnTurnEnd, when set before Run, observe the response
+	// sub-chain lifecycle (M6's state machine listens here). They run on the
+	// orchestrator goroutine: fast, non-blocking.
+	OnTurnStart func()
+	OnTurnEnd   func(cancelled bool)
+
 	history []adapter.Message // orchestrator-goroutine only
 
 	statsMu sync.Mutex

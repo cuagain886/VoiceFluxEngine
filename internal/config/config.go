@@ -64,8 +64,12 @@ type PipelineConfig struct {
 }
 
 // VADConfig holds the inline energy-VAD thresholds and jitter filters.
+// EnergyThreshold is the enter (speech) threshold; ExitThreshold the lower
+// stay-in-speech threshold — the gap between them is the hysteresis that
+// suppresses flutter around a single line (双门限).
 type VADConfig struct {
 	EnergyThreshold float64       `yaml:"energy_threshold"`
+	ExitThreshold   float64       `yaml:"exit_threshold"`
 	MinSpeech       time.Duration `yaml:"min_speech"`
 	Hangover        time.Duration `yaml:"hangover"`
 }
@@ -133,6 +137,7 @@ func Default() Config {
 		},
 		VAD: VADConfig{
 			EnergyThreshold: 0.01,
+			ExitThreshold:   0.005,
 			MinSpeech:       100 * time.Millisecond,
 			Hangover:        300 * time.Millisecond,
 		},
@@ -218,6 +223,10 @@ func (c Config) Validate() error {
 	}
 	if c.VAD.Hangover < c.VAD.MinSpeech {
 		return fmt.Errorf("vad.hangover (%s) should be >= vad.min_speech (%s)", c.VAD.Hangover, c.VAD.MinSpeech)
+	}
+	if c.VAD.ExitThreshold <= 0 || c.VAD.ExitThreshold > c.VAD.EnergyThreshold {
+		return fmt.Errorf("vad.exit_threshold must be in (0, energy_threshold], got %g vs %g",
+			c.VAD.ExitThreshold, c.VAD.EnergyThreshold)
 	}
 	return nil
 }
