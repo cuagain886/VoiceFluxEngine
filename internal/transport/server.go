@@ -27,11 +27,13 @@ type Server struct {
 
 // NewServer returns a Server wired with the echo handler (the M2 default).
 func NewServer(cfg config.ServerConfig, log *slog.Logger) *Server {
-	return &Server{
-		cfg:     cfg,
-		log:     log,
-		handler: EchoHandler(cfg.HeartbeatPeriod, log),
-	}
+	return NewServerWithHandler(cfg, log, EchoHandler(cfg.HeartbeatPeriod, log))
+}
+
+// NewServerWithHandler returns a Server running the given per-connection
+// handler (M7+: the voice session handler).
+func NewServerWithHandler(cfg config.ServerConfig, log *slog.Logger, h Handler) *Server {
+	return &Server{cfg: cfg, log: log, handler: h}
 }
 
 // Run starts the HTTP/WebSocket server and blocks until ctx is cancelled.
@@ -40,10 +42,7 @@ func NewServer(cfg config.ServerConfig, log *slog.Logger) *Server {
 // connections by default, so accepted connections already disable Nagle — no
 // action needed here beyond disabling WebSocket compression (see handleWS).
 func (s *Server) Run(ctx context.Context) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", s.handleWS)
-
-	httpServer := &http.Server{Addr: s.cfg.Addr, Handler: mux}
+	httpServer := &http.Server{Addr: s.cfg.Addr, Handler: s.HTTPHandler()}
 
 	go func() {
 		<-ctx.Done()
@@ -57,6 +56,18 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// HTTPHandler returns the server's routing (WS endpoint + optional static
+// demo client), usable directly with httptest in integration tests.
+func (s *Server) HTTPHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.handleWS)
+	if dir := s.cfg.StaticDir; dir != "" {
+		// Serve the demo client (web/). The /ws upgrade path keeps priority.
+		mux.Handle("/", http.FileServer(http.Dir(dir)))
+	}
+	return mux
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {

@@ -11,6 +11,7 @@ import (
 
 	"voicestream/internal/adapter"
 	"voicestream/internal/config"
+	"voicestream/internal/session"
 	"voicestream/internal/transport"
 
 	// Self-registering adapters, selectable via config.
@@ -35,8 +36,9 @@ func main() {
 	}
 
 	// Assemble adapters now so a bad selection or missing API key fails at
-	// startup, not mid-conversation. The pipeline consumes the set in M5.
-	if _, err := adapter.Build(cfg); err != nil {
+	// startup, not mid-conversation.
+	set, err := adapter.Build(cfg)
+	if err != nil {
 		logger.Error("adapter assembly failed", "err", err)
 		os.Exit(1)
 	}
@@ -51,7 +53,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	srv := transport.NewServer(cfg.Server, logger)
+	srv := transport.NewServerWithHandler(cfg.Server, logger,
+		session.VoiceHandler(cfg, set, logger))
 	if err := srv.Run(ctx); err != nil {
 		logger.Error("transport server error", "err", err)
 		os.Exit(1)

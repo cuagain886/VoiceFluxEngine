@@ -13,10 +13,19 @@ enum FrameType {
   FRAME_TYPE_CONTROL = 3; // payload = ControlPayload
 }
 
+// TextSource tells the client which conversational lane a TEXT frame
+// belongs to, so transcripts and agent subtitles render separately.
+enum TextSource {
+  TEXT_SOURCE_UNSPECIFIED = 0;
+  TEXT_SOURCE_TRANSCRIPT = 1; // ASR result: what the user said
+  TEXT_SOURCE_TOKEN = 2;      // LLM token: what the agent is saying
+}
+
 // TextPayload carries an incremental or final transcript / token.
 message TextPayload {
   string text = 1;
   bool final = 2; // true = final (e.g. ASR final / utterance end)
+  TextSource source = 3;
 }
 
 // ControlKind enumerates control-plane signals.

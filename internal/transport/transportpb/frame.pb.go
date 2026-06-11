@@ -75,6 +75,57 @@ func (FrameType) EnumDescriptor() ([]byte, []int) {
 	return file_internal_transport_transportpb_frame_proto_rawDescGZIP(), []int{0}
 }
 
+// TextSource tells the client which conversational lane a TEXT frame
+// belongs to, so transcripts and agent subtitles render separately.
+type TextSource int32
+
+const (
+	TextSource_TEXT_SOURCE_UNSPECIFIED TextSource = 0
+	TextSource_TEXT_SOURCE_TRANSCRIPT  TextSource = 1 // ASR result: what the user said
+	TextSource_TEXT_SOURCE_TOKEN       TextSource = 2 // LLM token: what the agent is saying
+)
+
+// Enum value maps for TextSource.
+var (
+	TextSource_name = map[int32]string{
+		0: "TEXT_SOURCE_UNSPECIFIED",
+		1: "TEXT_SOURCE_TRANSCRIPT",
+		2: "TEXT_SOURCE_TOKEN",
+	}
+	TextSource_value = map[string]int32{
+		"TEXT_SOURCE_UNSPECIFIED": 0,
+		"TEXT_SOURCE_TRANSCRIPT":  1,
+		"TEXT_SOURCE_TOKEN":       2,
+	}
+)
+
+func (x TextSource) Enum() *TextSource {
+	p := new(TextSource)
+	*p = x
+	return p
+}
+
+func (x TextSource) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TextSource) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_transport_transportpb_frame_proto_enumTypes[1].Descriptor()
+}
+
+func (TextSource) Type() protoreflect.EnumType {
+	return &file_internal_transport_transportpb_frame_proto_enumTypes[1]
+}
+
+func (x TextSource) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TextSource.Descriptor instead.
+func (TextSource) EnumDescriptor() ([]byte, []int) {
+	return file_internal_transport_transportpb_frame_proto_rawDescGZIP(), []int{1}
+}
+
 // ControlKind enumerates control-plane signals.
 type ControlKind int32
 
@@ -115,11 +166,11 @@ func (x ControlKind) String() string {
 }
 
 func (ControlKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_transport_transportpb_frame_proto_enumTypes[1].Descriptor()
+	return file_internal_transport_transportpb_frame_proto_enumTypes[2].Descriptor()
 }
 
 func (ControlKind) Type() protoreflect.EnumType {
-	return &file_internal_transport_transportpb_frame_proto_enumTypes[1]
+	return &file_internal_transport_transportpb_frame_proto_enumTypes[2]
 }
 
 func (x ControlKind) Number() protoreflect.EnumNumber {
@@ -128,7 +179,7 @@ func (x ControlKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ControlKind.Descriptor instead.
 func (ControlKind) EnumDescriptor() ([]byte, []int) {
-	return file_internal_transport_transportpb_frame_proto_rawDescGZIP(), []int{1}
+	return file_internal_transport_transportpb_frame_proto_rawDescGZIP(), []int{2}
 }
 
 // TextPayload carries an incremental or final transcript / token.
@@ -136,6 +187,7 @@ type TextPayload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
 	Final         bool                   `protobuf:"varint,2,opt,name=final,proto3" json:"final,omitempty"` // true = final (e.g. ASR final / utterance end)
+	Source        TextSource             `protobuf:"varint,3,opt,name=source,proto3,enum=voicestream.transport.v1.TextSource" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -182,6 +234,13 @@ func (x *TextPayload) GetFinal() bool {
 		return x.Final
 	}
 	return false
+}
+
+func (x *TextPayload) GetSource() TextSource {
+	if x != nil {
+		return x.Source
+	}
+	return TextSource_TEXT_SOURCE_UNSPECIFIED
 }
 
 // ControlPayload carries a control-plane signal.
@@ -241,10 +300,11 @@ var File_internal_transport_transportpb_frame_proto protoreflect.FileDescriptor
 
 const file_internal_transport_transportpb_frame_proto_rawDesc = "" +
 	"\n" +
-	"*internal/transport/transportpb/frame.proto\x12\x18voicestream.transport.v1\"7\n" +
+	"*internal/transport/transportpb/frame.proto\x12\x18voicestream.transport.v1\"u\n" +
 	"\vTextPayload\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
-	"\x05final\x18\x02 \x01(\bR\x05final\"c\n" +
+	"\x05final\x18\x02 \x01(\bR\x05final\x12<\n" +
+	"\x06source\x18\x03 \x01(\x0e2$.voicestream.transport.v1.TextSourceR\x06source\"c\n" +
 	"\x0eControlPayload\x129\n" +
 	"\x04kind\x18\x01 \x01(\x0e2%.voicestream.transport.v1.ControlKindR\x04kind\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail*j\n" +
@@ -252,7 +312,12 @@ const file_internal_transport_transportpb_frame_proto_rawDesc = "" +
 	"\x16FRAME_TYPE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10FRAME_TYPE_AUDIO\x10\x01\x12\x13\n" +
 	"\x0fFRAME_TYPE_TEXT\x10\x02\x12\x16\n" +
-	"\x12FRAME_TYPE_CONTROL\x10\x03*\x8d\x01\n" +
+	"\x12FRAME_TYPE_CONTROL\x10\x03*\\\n" +
+	"\n" +
+	"TextSource\x12\x1b\n" +
+	"\x17TEXT_SOURCE_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16TEXT_SOURCE_TRANSCRIPT\x10\x01\x12\x15\n" +
+	"\x11TEXT_SOURCE_TOKEN\x10\x02*\x8d\x01\n" +
 	"\vControlKind\x12\x1c\n" +
 	"\x18CONTROL_KIND_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CONTROL_KIND_START\x10\x01\x12\x15\n" +
@@ -272,21 +337,23 @@ func file_internal_transport_transportpb_frame_proto_rawDescGZIP() []byte {
 	return file_internal_transport_transportpb_frame_proto_rawDescData
 }
 
-var file_internal_transport_transportpb_frame_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_internal_transport_transportpb_frame_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_internal_transport_transportpb_frame_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_internal_transport_transportpb_frame_proto_goTypes = []any{
 	(FrameType)(0),         // 0: voicestream.transport.v1.FrameType
-	(ControlKind)(0),       // 1: voicestream.transport.v1.ControlKind
-	(*TextPayload)(nil),    // 2: voicestream.transport.v1.TextPayload
-	(*ControlPayload)(nil), // 3: voicestream.transport.v1.ControlPayload
+	(TextSource)(0),        // 1: voicestream.transport.v1.TextSource
+	(ControlKind)(0),       // 2: voicestream.transport.v1.ControlKind
+	(*TextPayload)(nil),    // 3: voicestream.transport.v1.TextPayload
+	(*ControlPayload)(nil), // 4: voicestream.transport.v1.ControlPayload
 }
 var file_internal_transport_transportpb_frame_proto_depIdxs = []int32{
-	1, // 0: voicestream.transport.v1.ControlPayload.kind:type_name -> voicestream.transport.v1.ControlKind
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 0: voicestream.transport.v1.TextPayload.source:type_name -> voicestream.transport.v1.TextSource
+	2, // 1: voicestream.transport.v1.ControlPayload.kind:type_name -> voicestream.transport.v1.ControlKind
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_internal_transport_transportpb_frame_proto_init() }
@@ -299,7 +366,7 @@ func file_internal_transport_transportpb_frame_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_transport_transportpb_frame_proto_rawDesc), len(file_internal_transport_transportpb_frame_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,

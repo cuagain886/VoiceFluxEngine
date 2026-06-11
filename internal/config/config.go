@@ -27,10 +27,12 @@ type Config struct {
 	Peripherals PeripheralsConfig `yaml:"peripherals"`
 }
 
-// ServerConfig holds transport/server settings.
+// ServerConfig holds transport/server settings. StaticDir, when non-empty,
+// is served at "/" (the browser demo client); empty disables static serving.
 type ServerConfig struct {
 	Addr            string        `yaml:"addr"`
 	HeartbeatPeriod time.Duration `yaml:"heartbeat_period"`
+	StaticDir       string        `yaml:"static_dir"`
 }
 
 // AudioConfig describes the canonical internal audio format (v1 assumes the
@@ -117,6 +119,7 @@ func Default() Config {
 		Server: ServerConfig{
 			Addr:            ":8080",
 			HeartbeatPeriod: 10 * time.Second,
+			StaticDir:       "web",
 		},
 		Audio: AudioConfig{
 			SampleRate:    16000,
