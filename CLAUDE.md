@@ -38,10 +38,13 @@ live in `docs/`.
 ## Conventions (MUST follow)
 
 1. **Git per update** — every change set is committed with a clear, focused
-   message. `main` must build green (`go build ./...`, `go vet ./...`,
-   `go test -race ./...` all pass) before committing.
+   message. **After every update, run the tests first; commit only when they
+   pass**: `go build ./...`, `go vet ./...`, `go test -race ./...` must all be
+   green before every commit — no exceptions, including docs-only changes.
 2. **Docs per module** — when a module/milestone completes, write its
    design + rationale doc under `docs/` (e.g. `docs/M2-transport-design.md`).
+   **All docs under `docs/` MUST be written in Chinese (中文)**; code
+   identifiers, commands and quoted spec terms may stay in English.
 3. **Decisions live in OpenSpec** — design decisions → `design.md`; new/changed
    requirements → `specs/`. Never silently diverge from the specs; update them.
 4. **Honesty over hype** — do not claim transport behaviors that TCP/WS already
