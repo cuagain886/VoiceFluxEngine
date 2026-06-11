@@ -70,8 +70,20 @@ type SessionConfig struct {
 // AdaptersConfig selects the model adapter implementations per stage.
 type AdaptersConfig struct {
 	ASR string `yaml:"asr"` // "mock" | "cloud" | ...
-	LLM string `yaml:"llm"`
+	LLM string `yaml:"llm"` // "mock" | "openai-compat"
 	TTS string `yaml:"tts"`
+
+	CloudLLM CloudLLMConfig `yaml:"cloud_llm"`
+}
+
+// CloudLLMConfig points the "openai-compat" LLM adapter at any OpenAI-style
+// chat-completions endpoint (DeepSeek, Qwen, Moonshot, OpenAI, ...). The API
+// key is never stored in the file: APIKeyEnv names the environment variable
+// that holds it.
+type CloudLLMConfig struct {
+	BaseURL   string `yaml:"base_url"`
+	Model     string `yaml:"model"`
+	APIKeyEnv string `yaml:"api_key_env"`
 }
 
 // PeripheralsConfig toggles optional, non-hot-path external systems.
@@ -112,7 +124,14 @@ func Default() Config {
 			IdleTimeout: 60 * time.Second,
 			DedupWindow: 256,
 		},
-		Adapters: AdaptersConfig{ASR: "mock", LLM: "mock", TTS: "mock"},
+		Adapters: AdaptersConfig{
+			ASR: "mock", LLM: "mock", TTS: "mock",
+			CloudLLM: CloudLLMConfig{
+				BaseURL:   "https://api.deepseek.com/v1",
+				Model:     "deepseek-chat",
+				APIKeyEnv: "VOICESTREAM_LLM_API_KEY",
+			},
+		},
 		Peripherals: PeripheralsConfig{
 			RedisEnabled: false,
 			KafkaEnabled: false,

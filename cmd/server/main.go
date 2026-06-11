@@ -9,8 +9,12 @@ import (
 	"os"
 	"os/signal"
 
+	"voicestream/internal/adapter"
 	"voicestream/internal/config"
 	"voicestream/internal/transport"
+
+	// Self-registering adapters, selectable via config.
+	_ "voicestream/internal/adapter/openaicompat"
 )
 
 func main() {
@@ -30,11 +34,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Assemble adapters now so a bad selection or missing API key fails at
+	// startup, not mid-conversation. The pipeline consumes the set in M5.
+	if _, err := adapter.Build(cfg); err != nil {
+		logger.Error("adapter assembly failed", "err", err)
+		os.Exit(1)
+	}
+
 	logger.Info("voicestream starting",
 		"addr", cfg.Server.Addr,
 		"sample_rate", cfg.Audio.SampleRate,
 		"frame", cfg.Audio.FrameDuration.String(),
-		"adapters", cfg.Adapters,
+		"asr", cfg.Adapters.ASR, "llm", cfg.Adapters.LLM, "tts", cfg.Adapters.TTS,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
