@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"voicestream/internal/ringbuf"
 )
 
 // Config is the root runtime configuration for the engine.
@@ -41,9 +43,13 @@ type AudioConfig struct {
 
 // RingBufConfig sizes the lock-free audio edge buffers. Capacities are in
 // frames and MUST be powers of two (validated) so the buffer can mask indices.
+// Policies pick the full-buffer behaviour per edge: "drop_oldest" (evict the
+// stalest frame, count it) or "reject" (refuse the write, backpressure).
 type RingBufConfig struct {
-	IngressCapacity int `yaml:"ingress_capacity"` // transport -> ASR
-	EgressCapacity  int `yaml:"egress_capacity"`  // TTS -> transport
+	IngressCapacity int    `yaml:"ingress_capacity"` // transport -> ASR
+	EgressCapacity  int    `yaml:"egress_capacity"`  // TTS -> transport
+	IngressPolicy   string `yaml:"ingress_policy"`
+	EgressPolicy    string `yaml:"egress_policy"`
 }
 
 // VADConfig holds the inline energy-VAD thresholds and jitter filters.
@@ -94,6 +100,8 @@ func Default() Config {
 		RingBuf: RingBufConfig{
 			IngressCapacity: 64,
 			EgressCapacity:  64,
+			IngressPolicy:   "drop_oldest",
+			EgressPolicy:    "drop_oldest",
 		},
 		VAD: VADConfig{
 			EnergyThreshold: 0.01,
@@ -163,6 +171,12 @@ func (c Config) Validate() error {
 	}
 	if !isPowerOfTwo(c.RingBuf.EgressCapacity) {
 		return fmt.Errorf("ring_buffer.egress_capacity must be a power of two, got %d", c.RingBuf.EgressCapacity)
+	}
+	if _, err := ringbuf.ParsePolicy(c.RingBuf.IngressPolicy); err != nil {
+		return fmt.Errorf("ring_buffer.ingress_policy: %w", err)
+	}
+	if _, err := ringbuf.ParsePolicy(c.RingBuf.EgressPolicy); err != nil {
+		return fmt.Errorf("ring_buffer.egress_policy: %w", err)
 	}
 	if c.VAD.Hangover < c.VAD.MinSpeech {
 		return fmt.Errorf("vad.hangover (%s) should be >= vad.min_speech (%s)", c.VAD.Hangover, c.VAD.MinSpeech)
