@@ -9,6 +9,7 @@ type StatusCode uint16
 
 const (
 	StatusNormalClosure StatusCode = 1000
+	StatusGoingAway     StatusCode = 1001
 	StatusProtocolError StatusCode = 1002
 	StatusMessageTooBig StatusCode = 1009
 	StatusInternalError StatusCode = 1011

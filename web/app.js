@@ -8,7 +8,7 @@
 const MAGIC0 = 0x56, MAGIC1 = 0x53, VERSION = 1, HEADER_SIZE = 24;
 const FRAME_AUDIO = 1, FRAME_TEXT = 2, FRAME_CONTROL = 3;
 const SRC_TRANSCRIPT = 1, SRC_TOKEN = 2;
-const CTRL_STOP = 2, CTRL_BARGE_IN = 3;
+const CTRL_START = 1, CTRL_STOP = 2, CTRL_BARGE_IN = 3, CTRL_ERROR = 4;
 
 const SAMPLE_RATE = 16000;
 const FRAME_SAMPLES = 320; // 20ms @ 16kHz
@@ -77,25 +77,50 @@ function decodeTextPayload(u8) {
   return out;
 }
 
-// ControlPayload { 1: enum kind, 2: string detail }
+// ControlPayload { 1: enum kind, 2: string detail, 3: string session_id,
+//                  4: uint64 epoch, 5: uint64 last_seq }
 function decodeControlPayload(u8) {
-  const out = { kind: 0, detail: '' };
+  const out = { kind: 0, detail: '', sessionId: '', epoch: 0, lastSeq: 0 };
   let pos = 0;
+  const td = new TextDecoder();
   while (pos < u8.length) {
     let tag; [tag, pos] = readVarint(u8, pos);
     const field = tag >>> 3, wire = tag & 7;
     if (wire === 0) {
       let v; [v, pos] = readVarint(u8, pos);
       if (field === 1) out.kind = v;
+      if (field === 4) out.epoch = v;
+      if (field === 5) out.lastSeq = v;
     } else if (wire === 2) {
       let len; [len, pos] = readVarint(u8, pos);
-      if (field === 2) out.detail = new TextDecoder().decode(u8.subarray(pos, pos + len));
+      const str = td.decode(u8.subarray(pos, pos + len));
+      if (field === 2) out.detail = str;
+      if (field === 3) out.sessionId = str;
       pos += len;
     } else {
       break;
     }
   }
   return out;
+}
+
+function writeVarint(bytes, v) {
+  while (v > 0x7f) { bytes.push((v & 0x7f) | 0x80); v >>>= 7; }
+  bytes.push(v);
+}
+
+// 编码 ControlPayload（握手 START / 收尾 STOP 用）。
+function encodeControlPayload(kind, sessionId, epoch, lastSeq) {
+  const bytes = [];
+  bytes.push(0x08); writeVarint(bytes, kind); // field 1 varint
+  if (sessionId) {
+    const idb = new TextEncoder().encode(sessionId);
+    bytes.push(0x1a); writeVarint(bytes, idb.length); // field 3 len-delim
+    for (const b of idb) bytes.push(b);
+  }
+  if (epoch > 0) { bytes.push(0x20); writeVarint(bytes, epoch); }   // field 4
+  if (lastSeq > 0) { bytes.push(0x28); writeVarint(bytes, lastSeq); } // field 5
+  return new Uint8Array(bytes);
 }
 
 // ---------- 自适应播放/去抖缓冲（7.3 / 7.3b） ----------
@@ -218,6 +243,10 @@ let playout;
 let uplinkSeq = 0, samplesSent = 0;
 let pendingTokens = []; // {tsUs, text} 等待播放进度揭示的字幕
 let captureBuf = new Float32Array(0);
+// 会话恢复状态（M8）：断线重连时凭 sessionId + 递增 epoch 接管同一会话。
+let sessionId = '', epoch = 0, lastDownSeq = 0;
+let reconnectTries = 0;
+const MAX_RECONNECT = 8;
 
 function setStatus(text) { ui.status.textContent = text; }
 
@@ -244,13 +273,7 @@ async function start() {
 
   playout = new PlayoutBuffer(audioCtx, () => refreshStats());
 
-  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  ws.binaryType = 'arraybuffer';
-  ws.onmessage = (ev) => onFrame(ev.data);
-  ws.onclose = () => { if (running) stop('连接已断开'); };
-  ws.onerror = () => { if (running) stop('连接出错'); };
-
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+  await connectWS();
 
   const source = audioCtx.createMediaStreamSource(mediaStream);
   workletNode = new AudioWorkletNode(audioCtx, 'capture');
@@ -262,6 +285,29 @@ async function start() {
   ui.btn.textContent = '结束对话';
   setStatus('请说话…');
   setInterval(revealTokens, 50);
+}
+
+// 建立 WS 并完成 START 握手；重连时复用 sessionId、epoch+1（M8）。
+async function connectWS() {
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = (ev) => onFrame(ev.data);
+  ws.onclose = () => { if (running) scheduleReconnect(); };
+
+  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+  // 握手：新会话 sessionId 为空、epoch 1；重连带上次 id 与递增 epoch。
+  ws.send(encodeFrame(FRAME_CONTROL, ++uplinkSeq, 0,
+    encodeControlPayload(CTRL_START, sessionId, epoch + 1, lastDownSeq)));
+}
+
+function scheduleReconnect() {
+  if (reconnectTries >= MAX_RECONNECT) { stop('重连失败，会话结束'); return; }
+  reconnectTries++;
+  setStatus(`连接中断，第 ${reconnectTries} 次重连…`);
+  setTimeout(() => {
+    if (!running) return;
+    connectWS().catch(() => scheduleReconnect());
+  }, 600);
 }
 
 // 把 worklet 的 128 采样块攒成 320 采样（20ms）帧，转 Int16 LE 上行（7.1/7.2）。
@@ -290,6 +336,7 @@ function onCapture(block) {
 function onFrame(buf) {
   const f = decodeFrame(buf);
   if (!f) return;
+  if (f.seq > 0n) lastDownSeq = Number(f.seq);
   switch (f.type) {
     case FRAME_AUDIO: {
       const n = f.payload.byteLength / 2;
@@ -318,11 +365,19 @@ function onFrame(buf) {
     }
     case FRAME_CONTROL: {
       const c = decodeControlPayload(f.payload);
-      if (c.kind === CTRL_BARGE_IN) {
+      if (c.kind === CTRL_START) {
+        // 握手回执：记下会话身份，重连计数清零（M8）。
+        sessionId = c.sessionId;
+        epoch = c.epoch;
+        reconnectTries = 0;
+        setStatus(c.detail === 'resumed' ? '已恢复会话，请继续…' : '请说话…');
+      } else if (c.kind === CTRL_BARGE_IN) {
         // 子链已取消：立刻停播、丢弃未揭示字幕（7.4）。
         playout.flush();
         pendingTokens = [];
         setStatus('你打断了 Agent，请继续说…');
+      } else if (c.kind === CTRL_ERROR) {
+        stop(`服务端错误：${c.detail}`);
       }
       break;
     }
@@ -341,17 +396,18 @@ function revealTokens() {
 
 function stop(reason) {
   running = false;
-  try { ws && ws.send(encodeFrame(FRAME_CONTROL, ++uplinkSeq, 0, encodeStop())); } catch (e) { /* ignore */ }
+  try {
+    ws && ws.send(encodeFrame(FRAME_CONTROL, ++uplinkSeq, 0,
+      encodeControlPayload(CTRL_STOP, '', 0, 0)));
+  } catch (e) { /* ignore */ }
   try { ws && ws.close(); } catch (e) { /* ignore */ }
   try { workletNode && workletNode.disconnect(); } catch (e) { /* ignore */ }
   try { mediaStream && mediaStream.getTracks().forEach((t) => t.stop()); } catch (e) { /* ignore */ }
   try { audioCtx && audioCtx.close(); } catch (e) { /* ignore */ }
+  sessionId = ''; epoch = 0; lastDownSeq = 0; reconnectTries = 0;
   ui.btn.textContent = '开始对话';
   setStatus(reason || '已结束');
 }
-
-// ControlPayload{kind: STOP}：field 1, varint 2 → 0x08 0x02
-function encodeStop() { return new Uint8Array([0x08, CTRL_STOP]); }
 
 ui.btn.addEventListener('click', () => {
   if (running) { stop(); return; }

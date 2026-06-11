@@ -76,12 +76,13 @@ type VADConfig struct {
 	Hangover        time.Duration `yaml:"hangover"`
 }
 
-// SessionConfig holds session lifecycle and reconnect settings. Note: over a
+// SessionConfig holds session lifecycle and reconnect settings. Over a
 // single WS/TCP connection frames are in-order, so there is no in-session
-// reorder window; DedupWindow only guards reconnect-replay.
+// reorder window; reconnect-replay dedup uses a sequence watermark, which a
+// TCP-ordered stream makes sufficient (no window needed). IdleTimeout doubles
+// as the reconnect grace window: a detached session lives this long.
 type SessionConfig struct {
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
-	DedupWindow int           `yaml:"dedup_window"` // seq window for replay dedup
 }
 
 // AdaptersConfig selects the model adapter implementations per stage.
@@ -146,7 +147,6 @@ func Default() Config {
 		},
 		Session: SessionConfig{
 			IdleTimeout: 60 * time.Second,
-			DedupWindow: 256,
 		},
 		Adapters: AdaptersConfig{
 			ASR: "mock", LLM: "mock", TTS: "mock",
@@ -230,6 +230,9 @@ func (c Config) Validate() error {
 	if c.VAD.ExitThreshold <= 0 || c.VAD.ExitThreshold > c.VAD.EnergyThreshold {
 		return fmt.Errorf("vad.exit_threshold must be in (0, energy_threshold], got %g vs %g",
 			c.VAD.ExitThreshold, c.VAD.EnergyThreshold)
+	}
+	if c.Session.IdleTimeout <= 0 {
+		return fmt.Errorf("session.idle_timeout must be positive, got %s", c.Session.IdleTimeout)
 	}
 	return nil
 }

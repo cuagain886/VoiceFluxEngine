@@ -244,10 +244,20 @@ func (x *TextPayload) GetSource() TextSource {
 }
 
 // ControlPayload carries a control-plane signal.
+//
+// START doubles as the session handshake (M8). Client -> server: session_id
+// empty for a new session, or a previous id with a claimed epoch strictly
+// greater than the last known one to resume; last_seq is the highest downlink
+// seq the client received. Server -> client (the ack): the authoritative
+// session_id/epoch, and last_seq = the highest uplink seq the server has
+// delivered (the client may skip replaying anything at or below it).
 type ControlPayload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Kind          ControlKind            `protobuf:"varint,1,opt,name=kind,proto3,enum=voicestream.transport.v1.ControlKind" json:"kind,omitempty"`
 	Detail        string                 `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"` // optional human-readable detail (e.g. error message)
+	SessionId     string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Epoch         uint64                 `protobuf:"varint,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	LastSeq       uint64                 `protobuf:"varint,5,opt,name=last_seq,json=lastSeq,proto3" json:"last_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -296,6 +306,27 @@ func (x *ControlPayload) GetDetail() string {
 	return ""
 }
 
+func (x *ControlPayload) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ControlPayload) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *ControlPayload) GetLastSeq() uint64 {
+	if x != nil {
+		return x.LastSeq
+	}
+	return 0
+}
+
 var File_internal_transport_transportpb_frame_proto protoreflect.FileDescriptor
 
 const file_internal_transport_transportpb_frame_proto_rawDesc = "" +
@@ -304,10 +335,14 @@ const file_internal_transport_transportpb_frame_proto_rawDesc = "" +
 	"\vTextPayload\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x14\n" +
 	"\x05final\x18\x02 \x01(\bR\x05final\x12<\n" +
-	"\x06source\x18\x03 \x01(\x0e2$.voicestream.transport.v1.TextSourceR\x06source\"c\n" +
+	"\x06source\x18\x03 \x01(\x0e2$.voicestream.transport.v1.TextSourceR\x06source\"\xb3\x01\n" +
 	"\x0eControlPayload\x129\n" +
 	"\x04kind\x18\x01 \x01(\x0e2%.voicestream.transport.v1.ControlKindR\x04kind\x12\x16\n" +
-	"\x06detail\x18\x02 \x01(\tR\x06detail*j\n" +
+	"\x06detail\x18\x02 \x01(\tR\x06detail\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\x12\x14\n" +
+	"\x05epoch\x18\x04 \x01(\x04R\x05epoch\x12\x19\n" +
+	"\blast_seq\x18\x05 \x01(\x04R\alastSeq*j\n" +
 	"\tFrameType\x12\x1a\n" +
 	"\x16FRAME_TYPE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10FRAME_TYPE_AUDIO\x10\x01\x12\x13\n" +

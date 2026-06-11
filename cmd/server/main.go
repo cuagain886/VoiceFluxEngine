@@ -53,8 +53,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	srv := transport.NewServerWithHandler(cfg.Server, logger,
-		session.VoiceHandler(cfg, set, logger))
+	mgr := session.NewManager(cfg, set, logger)
+	go mgr.Run(ctx) // idle reaper; reclaims all sessions on shutdown
+
+	srv := transport.NewServerWithHandler(cfg.Server, logger, mgr.Handler())
 	if err := srv.Run(ctx); err != nil {
 		logger.Error("transport server error", "err", err)
 		os.Exit(1)

@@ -38,7 +38,17 @@ enum ControlKind {
 }
 
 // ControlPayload carries a control-plane signal.
+//
+// START doubles as the session handshake (M8). Client -> server: session_id
+// empty for a new session, or a previous id with a claimed epoch strictly
+// greater than the last known one to resume; last_seq is the highest downlink
+// seq the client received. Server -> client (the ack): the authoritative
+// session_id/epoch, and last_seq = the highest uplink seq the server has
+// delivered (the client may skip replaying anything at or below it).
 message ControlPayload {
   ControlKind kind = 1;
   string detail = 2; // optional human-readable detail (e.g. error message)
+  string session_id = 3;
+  uint64 epoch = 4;
+  uint64 last_seq = 5;
 }
