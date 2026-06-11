@@ -116,6 +116,16 @@ func (r *Registry) NewGaugeFunc(name, help string, fn func() float64) {
 	})
 }
 
+// NewCounterFunc registers a scrape-time sampled counter — for monotonic
+// values whose source of truth lives elsewhere (e.g. runtime CPU seconds).
+func (r *Registry) NewCounterFunc(name, help string, fn func() float64) {
+	g := &gaugeFunc{name: name, help: help, fn: fn}
+	r.add(func(w *textWriter) {
+		w.head(g.name, g.help, "counter")
+		w.line(g.name, "", g.fn())
+	})
+}
+
 func (r *Registry) add(render func(w *textWriter)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

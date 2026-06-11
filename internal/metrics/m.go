@@ -43,6 +43,7 @@ type M struct {
 // New builds the process-wide instrument set.
 func New() *M {
 	r := NewRegistry()
+	registerRuntimeGauges(r)
 	return &M{
 		Registry:       r,
 		Hub:            NewHub(),

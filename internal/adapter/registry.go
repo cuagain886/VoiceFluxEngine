@@ -90,18 +90,29 @@ func names[T any](reg map[string]Factory[T]) []string {
 	return ns
 }
 
-// Built-in mocks, selected by adapters.{asr,llm,tts} = "mock".
+// Built-in mocks, selected by adapters.{asr,llm,tts} = "mock". The optional
+// adapters.mock latencies shape turn timing for the load harness; they
+// default to zero (instant mocks).
 func init() {
-	RegisterASR("mock", func(config.Config) (ASR, error) {
-		return &MockASR{Script: "hello voicestream", PartialEvery: 10}, nil
+	RegisterASR("mock", func(cfg config.Config) (ASR, error) {
+		return &MockASR{
+			Script:       "hello voicestream",
+			PartialEvery: 10,
+			Latency:      Latency{Delay: cfg.Adapters.Mock.ASRFinalDelay},
+		}, nil
 	})
-	RegisterLLM("mock", func(config.Config) (LLM, error) {
-		return &MockLLM{}, nil
+	RegisterLLM("mock", func(cfg config.Config) (LLM, error) {
+		return &MockLLM{Latency: Latency{
+			Delay:  cfg.Adapters.Mock.LLMTokenDelay,
+			Jitter: cfg.Adapters.Mock.LLMTokenJitter,
+			Seed:   1,
+		}}, nil
 	})
 	RegisterTTS("mock", func(cfg config.Config) (TTS, error) {
 		return &MockTTS{
 			SampleRate:    cfg.Audio.SampleRate,
 			FrameDuration: cfg.Audio.FrameDuration,
+			Latency:       Latency{Delay: cfg.Adapters.Mock.TTSFrameDelay},
 		}, nil
 	})
 }

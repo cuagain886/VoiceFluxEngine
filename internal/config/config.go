@@ -91,7 +91,19 @@ type AdaptersConfig struct {
 	LLM string `yaml:"llm"` // "mock" | "openai-compat"
 	TTS string `yaml:"tts"`
 
-	CloudLLM CloudLLMConfig `yaml:"cloud_llm"`
+	CloudLLM CloudLLMConfig     `yaml:"cloud_llm"`
+	Mock     MockAdaptersConfig `yaml:"mock"`
+}
+
+// MockAdaptersConfig injects latency into the built-in mock adapters so the
+// load harness can shape realistic turn timing (a zero-latency mock completes
+// a turn near-instantly, leaving no in-flight window to barge into). All
+// values default to zero: the mocks stay instant unless asked otherwise.
+type MockAdaptersConfig struct {
+	ASRFinalDelay  time.Duration `yaml:"asr_final_delay"` // before the final transcript
+	LLMTokenDelay  time.Duration `yaml:"llm_token_delay"` // before each token
+	LLMTokenJitter time.Duration `yaml:"llm_token_jitter"`
+	TTSFrameDelay  time.Duration `yaml:"tts_frame_delay"` // before each synthesized frame
 }
 
 // CloudLLMConfig points the "openai-compat" LLM adapter at any OpenAI-style
@@ -233,6 +245,10 @@ func (c Config) Validate() error {
 	}
 	if c.Session.IdleTimeout <= 0 {
 		return fmt.Errorf("session.idle_timeout must be positive, got %s", c.Session.IdleTimeout)
+	}
+	m := c.Adapters.Mock
+	if m.ASRFinalDelay < 0 || m.LLMTokenDelay < 0 || m.LLMTokenJitter < 0 || m.TTSFrameDelay < 0 {
+		return fmt.Errorf("adapters.mock delays must be non-negative, got %+v", m)
 	}
 	return nil
 }
