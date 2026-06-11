@@ -110,7 +110,7 @@ func (l *LLM) Stream(ctx context.Context, turn adapter.Turn, out chan<- adapter.
 	if err != nil {
 		return fmt.Errorf("openaicompat: request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("openaicompat: %s: %s", resp.Status, strings.TrimSpace(string(detail)))

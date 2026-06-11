@@ -1,4 +1,13 @@
-# Minimal, version-tolerant golangci-lint config. Relies on the linter's
-# default set; expand `linters.enable` once the toolchain version is pinned.
+# Minimal golangci-lint v2 config. Relies on the default linter set; expand
+# `linters` as the codebase grows.
+version: "2"
 run:
   timeout: 5m
+linters:
+  exclusions:
+    rules:
+      # Test code legitimately discards errors (httptest writes, teardown
+      # closes); production code stays under full errcheck.
+      - path: _test\.go
+        linters:
+          - errcheck

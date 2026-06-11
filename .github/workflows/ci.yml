@@ -28,6 +28,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v8
         with:
           version: latest
+          # Build golangci-lint with this workflow's own Go toolchain so its
+          # typechecker can never lag behind the project's Go version (the
+          # prebuilt binary once shipped with an older Go and failed all
+          # typechecks against the 1.26 stdlib).
+          install-mode: goinstall
