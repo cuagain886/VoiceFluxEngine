@@ -1,0 +1,58 @@
+<svg viewBox="0 0 880 470" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+  <rect width="880" height="470" fill="#0d1117"/>
+  <text x="24" y="34" font-size="15" font-weight="600" fill="#7ee0c2">voicestream 延迟仪表盘 — 逐轮瀑布图（/dash.html · 实测记录矢量重绘）</text>
+  <text x="24" y="54" font-size="11" fill="#8b949e">ASR / LLM / TTS 流水线重叠 vs 朴素串行（灰条） · 数据源 /debug/turns SSE</text>
+
+  <!-- legend -->
+  <g font-size="10.5" fill="#8b949e">
+    <rect x="24" y="68" width="10" height="10" fill="#1f6feb"/><text x="38" y="77">ASR 定稿</text>
+    <rect x="106" y="68" width="10" height="10" fill="#a371f7"/><text x="120" y="77">LLM token 流</text>
+    <rect x="206" y="68" width="10" height="10" fill="#2ea043"/><text x="220" y="77">TTS 合成</text>
+    <rect x="288" y="68" width="10" height="10" fill="#f0883e"/><text x="302" y="77">首帧下行（首响）</text>
+    <rect x="402" y="68" width="10" height="10" fill="#6e7681"/><text x="416" y="77">朴素串行总和</text>
+  </g>
+
+  <!-- ===== Turn 1: completed ===== -->
+  <rect x="24" y="94" width="832" height="170" rx="8" fill="#161b22" stroke="#30363d"/>
+  <text x="40" y="118" font-size="11" fill="#8b949e">10:24:02 · 会话 <tspan fill="#e6edf3" font-weight="600">1f69d738</tspan> · 你：<tspan fill="#e6edf3" font-weight="600">hello voicestream</tspan> · Agent：echo: hello voicestream</text>
+
+  <g font-size="10" fill="#8b949e" text-anchor="end">
+    <text x="112" y="142">ASR</text><text x="112" y="164">LLM</text><text x="112" y="186">TTS</text>
+    <text x="112" y="208">实际</text><text x="112" y="230">串行</text>
+  </g>
+  <g>
+    <rect x="120" y="132" width="640" height="13" fill="#0d1117" rx="3"/>
+    <rect x="120" y="132" width="26.8" height="13" fill="#1f6feb" rx="3"/>
+    <rect x="120" y="154" width="640" height="13" fill="#0d1117" rx="3"/>
+    <rect x="146.8" y="154" width="42.7" height="13" fill="#a371f7" rx="3"/>
+    <rect x="120" y="176" width="640" height="13" fill="#0d1117" rx="3"/>
+    <rect x="162.6" y="176" width="570.5" height="13" fill="#2ea043" rx="3"/>
+    <rect x="169.7" y="174" width="2" height="17" fill="#f0883e"/>
+    <rect x="120" y="198" width="640" height="13" fill="#0d1117" rx="3"/>
+    <rect x="120" y="198" width="613.1" height="13" fill="#79c0ff33" stroke="#79c0ff66" rx="3"/>
+    <rect x="120" y="220" width="640" height="13" fill="#6e7681" rx="3"/>
+  </g>
+  <text x="40" y="252" font-size="10.5" fill="#8b949e">首响 <tspan fill="#e6edf3" font-weight="600">114ms</tspan>　内核开销 <tspan fill="#e6edf3" font-weight="600">&lt;0.1ms</tspan>　<tspan fill="#7ee787" font-weight="600">流水线省时 4%（串行需 1.43s）</tspan>　轮墙钟 1374ms</text>
+
+  <!-- ===== Turn 2: barged-in ===== -->
+  <rect x="24" y="280" width="832" height="170" rx="8" fill="#161b22" stroke="#f8514966"/>
+  <text x="40" y="304" font-size="11" fill="#8b949e">10:24:06 · 会话 <tspan fill="#e6edf3" font-weight="600">1f69d738</tspan> · 你：<tspan fill="#e6edf3" font-weight="600">hello voicestream</tspan> · Agent：echo: hello…（被打断）</text>
+
+  <g font-size="10" fill="#8b949e" text-anchor="end">
+    <text x="112" y="328">ASR</text><text x="112" y="350">LLM</text><text x="112" y="372">TTS</text>
+    <text x="112" y="394">实际</text><text x="112" y="416">串行</text>
+  </g>
+  <g>
+    <rect x="120" y="318" width="640" height="13" fill="#0d1117" rx="3"/>
+    <rect x="120" y="318" width="86.3" height="13" fill="#1f6feb" rx="3"/>
+    <rect x="120" y="340" width="640" height="13" fill="#0d1117" rx="3"/>
+    <rect x="206.3" y="340" width="138.1" height="13" fill="#a371f7" rx="3"/>
+    <rect x="120" y="362" width="640" height="13" fill="#0d1117" rx="3"/>
+    <rect x="256.8" y="362" width="415.6" height="13" fill="#2ea043" rx="3"/>
+    <rect x="282.1" y="360" width="2" height="17" fill="#f0883e"/>
+    <rect x="120" y="384" width="640" height="13" fill="#0d1117" rx="3"/>
+    <rect x="120" y="384" width="552.4" height="13" fill="#79c0ff33" stroke="#79c0ff66" rx="3"/>
+    <rect x="120" y="406" width="640" height="13" fill="#6e7681" rx="3"/>
+  </g>
+  <text x="40" y="438" font-size="10.5" fill="#8b949e">首响 <tspan fill="#e6edf3" font-weight="600">114ms</tspan>　<tspan fill="#f85149" font-weight="600">被打断，内核取消耗时 &lt;1ms</tspan>　用户开口后 TTS 即停，在途音频清空，轮 385ms 终止</text>
+</svg>
