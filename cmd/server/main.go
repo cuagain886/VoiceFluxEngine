@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 
@@ -61,6 +63,11 @@ func main() {
 	srv := transport.NewServerWithHandler(cfg.Server, logger, mgr.Handler())
 	srv.RegisterRoute("/metrics", m.Registry.Handler()) // Prometheus scrape
 	srv.RegisterRoute("/debug/turns", m.Hub)            // dashboard SSE feed
+	// pprof for the 11.2 hot-path iteration (single-tenant dev kernel; gate
+	// behind auth before any multi-tenant exposure).
+	srv.RegisterRoute("/debug/pprof/", http.HandlerFunc(pprof.Index))
+	srv.RegisterRoute("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+	srv.RegisterRoute("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
 	if err := srv.Run(ctx); err != nil {
 		logger.Error("transport server error", "err", err)
 		os.Exit(1)

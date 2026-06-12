@@ -59,13 +59,25 @@ func (f Frame) EncodedLen() int { return HeaderSize + len(f.Payload) }
 // MarshalBinary encodes the frame into a freshly allocated byte slice.
 // It implements encoding.BinaryMarshaler.
 func (f Frame) MarshalBinary() ([]byte, error) {
+	buf, err := f.AppendBinary(make([]byte, 0, f.EncodedLen()))
+	if err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// AppendBinary appends the encoded frame to buf and returns the extended
+// slice (encoding.BinaryAppender). The transport write path keeps one
+// scratch buffer per connection and re-encodes into it, so steady-state
+// downlink marshaling allocates nothing (11.2 zero-alloc gate).
+func (f Frame) AppendBinary(buf []byte) ([]byte, error) {
 	if len(f.Payload) > MaxPayload {
 		return nil, fmt.Errorf("%w: %d > %d", ErrPayloadTooLarge, len(f.Payload), MaxPayload)
 	}
-	buf := make([]byte, f.EncodedLen())
-	f.encodeHeader(buf)
-	copy(buf[HeaderSize:], f.Payload)
-	return buf, nil
+	var hdr [HeaderSize]byte
+	f.encodeHeader(hdr[:])
+	buf = append(buf, hdr[:]...)
+	return append(buf, f.Payload...), nil
 }
 
 func (f Frame) encodeHeader(buf []byte) {

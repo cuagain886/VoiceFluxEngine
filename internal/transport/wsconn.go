@@ -8,8 +8,12 @@ import (
 )
 
 // wsConn adapts a *websocket.Conn to the transport-agnostic Conn interface.
+// scratch is the write-side encode buffer: Conn's contract allows at most
+// one writer at a time, so reusing it across WriteFrame calls is safe and
+// keeps the steady-state downlink path allocation-free.
 type wsConn struct {
-	c *websocket.Conn
+	c       *websocket.Conn
+	scratch []byte
 }
 
 // newWSConn wraps an accepted/dialed WebSocket connection. It raises the read
@@ -32,10 +36,11 @@ func (w *wsConn) ReadFrame(ctx context.Context) (Frame, error) {
 }
 
 func (w *wsConn) WriteFrame(ctx context.Context, f Frame) error {
-	b, err := f.MarshalBinary()
+	b, err := f.AppendBinary(w.scratch[:0])
 	if err != nil {
 		return err
 	}
+	w.scratch = b // keep the grown buffer for the next frame
 	return w.c.Write(ctx, websocket.MessageBinary, b)
 }
 
