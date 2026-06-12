@@ -70,9 +70,23 @@ func TestAnalyzeCPUWall(t *testing.T) {
 func TestAnalyzeDropWall(t *testing.T) {
 	a := Analyze(recordsFixture(func(r []StepRecord) {
 		r[1].IngressDropRate = 0.05
+		r[2].IngressDropRate = 0.12 // persists into the heavier step
 	}))
 	if a.KneeConcurrency != 20 || a.Wall != "drops" {
 		t.Fatalf("analysis = %+v, want drops wall at 20", a)
+	}
+}
+
+// TestAnalyzeIgnoresTransientSpike pins the persistence rule: one degraded
+// window followed by clean heavier steps (GC pause, OS hiccup) is not a
+// capacity knee — exhausted capacity does not recover under more load.
+func TestAnalyzeIgnoresTransientSpike(t *testing.T) {
+	a := Analyze(recordsFixture(func(r []StepRecord) {
+		r[1].SrvFirstP99 = 430 // spike at 20...
+		// ...but the 80-concurrency step is clean again (fixture default).
+	}))
+	if a.KneeConcurrency != 0 || a.Wall != "none" {
+		t.Fatalf("analysis = %+v, want transient ignored", a)
 	}
 }
 

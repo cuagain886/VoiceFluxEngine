@@ -84,13 +84,17 @@ func (c *Config) normalize() error {
 
 func (c *Config) frameNominalUs() int64 { return c.FrameDuration.Microseconds() }
 
-// rampStagger spreads a step's new connections out so the server never sees
-// a thundering herd that a real deployment's arrival process would not have.
+// rampStagger spreads a step's new connections (and so their turn phases)
+// across the warmup window. Two birds: the server never sees a thundering
+// herd a real arrival process would not have, and — because the mock-driven
+// turns all take near-identical wall time — workers spawned in lockstep
+// would otherwise stay phase-locked forever, hammering the server in
+// synchronized waves whose peak demand says nothing about steady load.
 func (c *Config) rampStagger() time.Duration {
-	if c.Warmup < time.Second {
+	if c.Warmup < 100*time.Millisecond {
 		return c.Warmup/2 + time.Millisecond
 	}
-	return time.Second
+	return c.Warmup
 }
 
 type sampleKind int

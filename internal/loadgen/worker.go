@@ -101,6 +101,12 @@ func (w *worker) run(ctx context.Context) {
 			var to *timeoutError
 			if errors.As(err, &to) {
 				w.col.fail(to.phase, err)
+				// Resync before the next turn: swallow whatever late
+				// response eventually limps in, or its audio would
+				// masquerade as the next turn's first response and fake a
+				// fast sample. Best effort — a second timeout moves on.
+				_ = w.silenceUntilQuiet(ctx, w.cfg.silencePCM)
+				drainTimes(w.dl.bargeC)
 				continue // stay connected; keep loading the server
 			}
 			w.col.fail("conn", err)
@@ -259,13 +265,15 @@ func (w *worker) turn(ctx context.Context, barge bool) error {
 	speech := w.cfg.speechPCM
 	silence := w.cfg.silencePCM
 
-	// Phase 1: the utterance.
+	// Phase 1: the utterance. The first-response t0 is the last speech
+	// frame's *ideal* slot — when the simulated user stopped speaking —
+	// so netem delay and send backlog count into the e2e measurement.
 	for i := 0; i < w.cfg.SpeechFrames; i++ {
 		if err := w.sendAudio(ctx, speech); err != nil {
 			return err
 		}
 	}
-	spokeAt := time.Now()
+	spokeAt := w.clk.lastIdeal
 
 	// Phase 2: silence (VAD hangover runs server-side) until the response.
 	firstAt, err := w.silenceUntilAudioAfter(ctx, spokeAt, silence)
@@ -280,7 +288,7 @@ func (w *worker) turn(ctx context.Context, barge bool) error {
 			return err
 		}
 		drainTimes(w.dl.bargeC)
-		bargeStart := time.Now()
+		bargeStart := w.clk.peekIdeal() // when the user opens their mouth
 		// Speak over the agent; a full utterance, so it also becomes the
 		// next prompt.
 		for i := 0; i < w.cfg.SpeechFrames; i++ {
@@ -288,7 +296,7 @@ func (w *worker) turn(ctx context.Context, barge bool) error {
 				return err
 			}
 		}
-		spokeAt = time.Now()
+		spokeAt = w.clk.lastIdeal
 		bargeAt, err := w.awaitBarge(ctx, silence, bargeStart)
 		if err != nil {
 			return err

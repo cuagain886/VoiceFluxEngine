@@ -123,8 +123,12 @@ type Analysis struct {
 
 // Analyze finds the capacity knee: the first step whose server-side first
 // response p99 leaves the baseline band (>2x baseline +20ms), or that sheds
-// >1% of ingress frames, or that records errors. The wall is whichever
-// limiting signal is loudest at that step.
+// >1% of ingress frames, or that records errors — and whose degradation
+// *persists into the next step* (or is the final step). A single degraded
+// window with clean steps after it is a transient (GC pause, OS hiccup,
+// background process), not a capacity knee: capacity exhaustion does not
+// recover by adding more load. The wall is whichever limiting signal is
+// loudest at the knee step.
 func Analyze(recs []StepRecord) Analysis {
 	if len(recs) == 0 {
 		return Analysis{Wall: "none", Reason: "无数据"}
@@ -136,22 +140,27 @@ func Analyze(recs []StepRecord) Analysis {
 		return r.E2EFirstP99
 	}
 	base := lat(recs[0])
-	for _, r := range recs {
-		degradedLatency := base >= 0 && lat(r) >= 0 && lat(r) > base*2+20
-		dropping := r.IngressDropRate > 0.01
-		erroring := r.Errors > 0
-		if !degradedLatency && !dropping && !erroring {
+	degraded := func(r StepRecord) bool {
+		return (base >= 0 && lat(r) >= 0 && lat(r) > base*2+20) ||
+			r.IngressDropRate > 0.01 ||
+			r.Errors > 0
+	}
+	for i, r := range recs {
+		if !degraded(r) {
 			continue
+		}
+		if i+1 < len(recs) && !degraded(recs[i+1]) {
+			continue // transient: the next, heavier step is clean again
 		}
 		a := Analysis{KneeConcurrency: r.Concurrency}
 		switch {
-		case erroring:
+		case r.Errors > 0:
 			a.Wall = "errors"
 			a.Reason = fmt.Sprintf("并发 %d 时出现 %d 个超时/连接错误（超出 %s 截止）", r.Concurrency, r.Errors, "TurnTimeout")
 		case r.CPUUtil >= 0.85:
 			a.Wall = "cpu"
 			a.Reason = fmt.Sprintf("并发 %d 时 CPU 利用率 %.0f%%，延迟 p99 %.0fms（基线 %.0fms）", r.Concurrency, r.CPUUtil*100, lat(r), base)
-		case dropping:
+		case r.IngressDropRate > 0.01:
 			a.Wall = "drops"
 			a.Reason = fmt.Sprintf("并发 %d 时入口丢帧率 %.2f%% —— 背压设计性卸载先于其它资源耗尽", r.Concurrency, r.IngressDropRate*100)
 		default:

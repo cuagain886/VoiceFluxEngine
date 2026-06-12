@@ -77,9 +77,10 @@ func (s *shaper) release(ideal time.Time) time.Time {
 // out back-to-back until the grid is caught up — like a real socket flushing
 // a backlog.
 type clock struct {
-	interval time.Duration
-	next     time.Time // ideal time of the next frame
-	sh       *shaper   // nil when no perturbation
+	interval  time.Duration
+	next      time.Time // ideal time of the next frame
+	lastIdeal time.Time // ideal time of the most recently sent frame
+	sh        *shaper   // nil when no perturbation
 }
 
 func newClock(interval time.Duration, n Netem) *clock {
@@ -92,6 +93,11 @@ func newClock(interval time.Duration, n Netem) *clock {
 
 // wait blocks until the next frame's (shaped) departure slot, then advances
 // the grid. Returns false if ctx ended first.
+//
+// lastIdeal afterwards holds the slot's *ideal* time — when the simulated
+// user produced the frame, before any netem shaping or send backlog. Latency
+// measured from it therefore includes uplink perturbation and client-side
+// queueing, the way a real user would feel them.
 func (c *clock) wait(ctx ctxDone) bool {
 	if c.next.IsZero() {
 		c.next = time.Now()
@@ -100,8 +106,17 @@ func (c *clock) wait(ctx ctxDone) bool {
 	if c.sh != nil {
 		at = c.sh.release(c.next)
 	}
+	c.lastIdeal = c.next
 	c.next = c.next.Add(c.interval)
 	return sleepUntil(ctx, at)
+}
+
+// peekIdeal returns the ideal time of the frame the next wait() will send.
+func (c *clock) peekIdeal() time.Time {
+	if c.next.IsZero() {
+		return time.Now()
+	}
+	return c.next
 }
 
 // ctxDone is the slice of context.Context the pacing helpers need; tests can

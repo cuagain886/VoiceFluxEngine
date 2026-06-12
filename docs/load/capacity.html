@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>voicestream · 容量曲线</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; background: #0d1117; color: #e6edf3;
+         font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  h1 { font-size: 1.1rem; color: #7ee0c2; margin: 0 0 2px; }
+  .sub { color: #8b949e; font-size: 0.8rem; margin-bottom: 6px; }
+  .verdict { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+             padding: 10px 16px; margin: 14px 0 20px; font-size: 0.9rem; }
+  .verdict b { color: #f0883e; }
+  .chart { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+           padding: 14px 16px 8px; margin-bottom: 18px; }
+  .chart h2 { font-size: 0.85rem; color: #79c0ff; margin: 0 0 8px; font-weight: 600; }
+  .legend { font-size: 0.72rem; color: #8b949e; margin: 6px 0 0; }
+  .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px;
+              margin: 0 5px 0 14px; vertical-align: 3px; }
+  svg text { font-family: inherit; }
+</style>
+</head>
+<body>
+<h1>voicestream 容量曲线</h1>
+<div class="sub" id="meta"></div>
+<div class="verdict" id="verdict"></div>
+<div id="charts"></div>
+<script>
+'use strict';
+const REPORT = {"config":"steps=[50 100 200 300 400 500 750 1000 1500] step=10s frame=20ms speech=30 barge_every=4","startedAt":"2026-06-12T09:54:33.9630017+08:00","finishedAt":"2026-06-12T09:56:38.6636797+08:00","records":[{"concurrency":50,"liveWorkers":50,"durationS":10.0001113,"turns":162,"errors":0,"e2eFirstP50":416.13800000000003,"e2eFirstP95":429.9763,"e2eFirstP99":437.5345,"e2eBargeP50":100.4868,"e2eBargeP99":110.3569,"srvFirstP50":150.00000000000003,"srvFirstP99":199,"srvKernelP99":4.949999999999999,"srvBargeP99":0.99,"serverTurnRate":21.099765159613774,"uplinkFPS":2499.9721753096887,"ingressDropRate":0,"egressDropPerS":0,"cpuUtil":0.05798901706926305,"goroutines":539,"heapMB":33.945709228515625,"sessionsActive":50},{"concurrency":100,"liveWorkers":100,"durationS":10.0005757,"turns":339,"errors":0,"e2eFirstP50":413.9472,"e2eFirstP95":414.734,"e2eFirstP99":415.4023,"e2eBargeP50":100.0046,"e2eBargeP99":101.38,"srvFirstP50":150.00000000000003,"srvFirstP99":199,"srvKernelP99":4.949999999999999,"srvBargeP99":-1,"serverTurnRate":44.09746130915243,"uplinkFPS":4999.71216657057,"ingressDropRate":0,"egressDropPerS":0,"cpuUtil":0.004529449612234283,"goroutines":1055,"heapMB":44.915306091308594,"sessionsActive":100},{"concurrency":200,"liveWorkers":200,"durationS":10.000026,"turns":676,"errors":0,"e2eFirstP50":413.8838,"e2eFirstP95":414.609,"e2eFirstP99":415.9103,"e2eBargeP50":100.0166,"e2eBargeP99":103.2293,"srvFirstP50":150.00000000000003,"srvFirstP99":199,"srvKernelP99":4.949999999999999,"srvBargeP99":-1,"serverTurnRate":86.29977562058339,"uplinkFPS":9999.774000587598,"ingressDropRate":0,"egressDropPerS":0,"cpuUtil":0.006231834409473573,"goroutines":2122,"heapMB":37.921546936035156,"sessionsActive":200},{"concurrency":300,"liveWorkers":300,"durationS":10.000287,"turns":985,"errors":0,"e2eFirstP50":413.9312,"e2eFirstP95":415.78700000000003,"e2eFirstP99":418.178,"e2eBargeP50":100.0147,"e2eBargeP99":101.6078,"srvFirstP50":150.00000000000003,"srvFirstP99":199,"srvKernelP99":4.95,"srvBargeP99":-1,"serverTurnRate":130.29626049732371,"uplinkFPS":14999.76950661516,"ingressDropRate":0,"egressDropPerS":0,"cpuUtil":0.016483527969042636,"goroutines":3250,"heapMB":55.838592529296875,"sessionsActive":300},{"concurrency":400,"liveWorkers":400,"durationS":10.00068,"turns":1264,"errors":0,"e2eFirstP50":422.2937,"e2eFirstP95":529.2685,"e2eFirstP99":589.9453,"e2eBargeP50":103.5969,"e2eBargeP99":285.07349999999997,"srvFirstP50":150.89506172839506,"srvFirstP99":329.4137931034482,"srvKernelP99":71.56896551724137,"srvBargeP99":44.749999999999986,"serverTurnRate":164.88878756244577,"uplinkFPS":19986.540915217767,"ingressDropRate":0,"egressDropPerS":0,"cpuUtil":0.41724839199641384,"goroutines":4225,"heapMB":48.79913330078125,"sessionsActive":400},{"concurrency":500,"liveWorkers":500,"durationS":10.0705193,"turns":1585,"errors":0,"e2eFirstP50":510.71509999999995,"e2eFirstP95":1009.1745999999999,"e2eFirstP99":1377.2085,"e2eBargeP50":208.55360000000002,"e2eBargeP99":900.3593,"srvFirstP50":152.86160249739856,"srvFirstP99":444.58181818181833,"srvKernelP99":103.23809523809554,"srvBargeP99":143,"serverTurnRate":202.07498137658104,"uplinkFPS":24801.998045920034,"ingressDropRate":0.00017215907498528642,"egressDropPerS":0,"cpuUtil":0.7457238759287029,"goroutines":5156,"heapMB":89.15473175048828,"sessionsActive":500},{"concurrency":750,"liveWorkers":750,"durationS":10.0277541,"turns":1508,"errors":6,"e2eFirstP50":589.8558,"e2eFirstP95":2477.5788,"e2eFirstP99":3932.9304,"e2eBargeP50":646.0546,"e2eBargeP99":3210.9782999999998,"srvFirstP50":158.95080023710727,"srvFirstP99":480.2417218543045,"srvKernelP99":228.77272727272592,"srvBargeP99":91.00000000000003,"serverTurnRate":198.94783818043564,"uplinkFPS":28075.77820441369,"ingressDropRate":0.21509783793959586,"egressDropPerS":0,"cpuUtil":0.7985941038159184,"goroutines":7474,"heapMB":75.09341430664062,"sessionsActive":750},{"concurrency":1000,"liveWorkers":1000,"durationS":12.3898693,"turns":1116,"errors":233,"e2eFirstP50":604.5858,"e2eFirstP95":2477.1122,"e2eFirstP99":5181.4431,"e2eBargeP50":780.1576,"e2eBargeP99":1905.1100000000001,"srvFirstP50":166.0702451954937,"srvFirstP99":757.1794871794865,"srvKernelP99":436.36065573770463,"srvBargeP99":95.74999999999996,"serverTurnRate":160.93793660922637,"uplinkFPS":32500.26212948025,"ingressDropRate":0.37279784639683716,"egressDropPerS":0,"cpuUtil":0.797405452328047,"goroutines":9530,"heapMB":170.66278839111328,"sessionsActive":1000},{"concurrency":1500,"liveWorkers":1499,"durationS":10.1352772,"turns":1046,"errors":133,"e2eFirstP50":530.1273,"e2eFirstP95":3856.9802,"e2eFirstP99":7020.2348,"e2eBargeP50":234.8476,"e2eBargeP99":2780.6891,"srvFirstP50":157.2593800978793,"srvFirstP99":479.4772727272728,"srvKernelP99":141.89473684210546,"srvBargeP99":24.7,"serverTurnRate":138.62472355467494,"uplinkFPS":33553.300347818804,"ingressDropRate":0.3839010562469124,"egressDropPerS":0,"cpuUtil":0.7833935228121176,"goroutines":14250,"heapMB":124.78955078125,"sessionsActive":1500}],"analysis":{"kneeConcurrency":500,"wall":"scheduling","reason":"并发 500 时延迟 p99 445ms（基线 199ms）而 CPU 仅 75% —— 指向调度/系统调用竞争（含同机 loadgen 争用）"}};
+const R = REPORT.records;
+
+document.getElementById('meta').textContent =
+  REPORT.config + ' · ' + new Date(REPORT.startedAt).toLocaleString();
+const A = REPORT.analysis;
+document.getElementById('verdict').innerHTML = (A.kneeConcurrency > 0
+  ? '容量拐点: <b>并发 ' + A.kneeConcurrency + '</b>（墙: ' + A.wall + '）— '
+  : '本次 ramp 未达拐点 — ') + esc(A.reason);
+
+function esc(s) {
+  return (s || '').replace(/[&<>"']/g, ch => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch]);
+}
+
+// series: {label, color, get(rec) -> value or null}
+function chart(title, unit, series, opts) {
+  opts = opts || {};
+  const W = 860, H = 300, L = 64, Rm = 16, T = 14, B = 40;
+  const xs = R.map(r => r.concurrency);
+  let ymax = opts.budget || 0;
+  for (const s of series) for (const r of R) {
+    const v = s.get(r); if (v != null && v >= 0 && v > ymax) ymax = v;
+  }
+  if (ymax <= 0) ymax = 1;
+  ymax *= 1.12;
+  const xpos = i => L + (W - L - Rm) * (xs.length === 1 ? 0.5 : i / (xs.length - 1));
+  const ypos = v => T + (H - T - B) * (1 - v / ymax);
+
+  let g = '';
+  // y grid + ticks
+  for (let k = 0; k <= 4; k++) {
+    const v = ymax * k / 4, y = ypos(v);
+    g += '<line x1="'+L+'" y1="'+y+'" x2="'+(W-Rm)+'" y2="'+y+'" stroke="#21262d"/>';
+    g += '<text x="'+(L-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="#8b949e">'
+       + (v >= 100 ? Math.round(v) : v.toFixed(v >= 10 ? 0 : 1)) + '</text>';
+  }
+  // x ticks at each step
+  xs.forEach((x, i) => {
+    g += '<text x="'+xpos(i)+'" y="'+(H-B+18)+'" text-anchor="middle" font-size="11" fill="#8b949e">'+x+'</text>';
+  });
+  g += '<text x="'+((L+W-Rm)/2)+'" y="'+(H-6)+'" text-anchor="middle" font-size="11" fill="#8b949e">并发会话数</text>';
+  g += '<text x="14" y="'+(T+6)+'" font-size="11" fill="#8b949e">'+unit+'</text>';
+  if (opts.budget) {
+    const y = ypos(opts.budget);
+    g += '<line x1="'+L+'" y1="'+y+'" x2="'+(W-Rm)+'" y2="'+y+'" stroke="#f85149" stroke-dasharray="5 4"/>'
+       + '<text x="'+(W-Rm-4)+'" y="'+(y-5)+'" text-anchor="end" font-size="11" fill="#f85149">'
+       + opts.budgetLabel + '</text>';
+  }
+  if (A.kneeConcurrency > 0) {
+    const ki = xs.indexOf(A.kneeConcurrency);
+    if (ki >= 0) {
+      const x = xpos(ki);
+      g += '<line x1="'+x+'" y1="'+T+'" x2="'+x+'" y2="'+(H-B)+'" stroke="#f0883e" stroke-dasharray="3 4"/>';
+    }
+  }
+  let legend = '';
+  for (const s of series) {
+    const pts = [];
+    R.forEach((r, i) => {
+      const v = s.get(r);
+      if (v != null && v >= 0) pts.push(xpos(i).toFixed(1) + ',' + ypos(v).toFixed(1));
+    });
+    g += '<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+s.color+'" stroke-width="2"/>';
+    R.forEach((r, i) => {
+      const v = s.get(r);
+      if (v != null && v >= 0)
+        g += '<circle cx="'+xpos(i)+'" cy="'+ypos(v)+'" r="3" fill="'+s.color+'"/>';
+    });
+    legend += '<i style="background:'+s.color+'"></i>' + esc(s.label);
+  }
+  const div = document.createElement('div');
+  div.className = 'chart';
+  div.innerHTML = '<h2>'+esc(title)+'</h2>'
+    + '<svg viewBox="0 0 '+W+' '+H+'" width="100%">'+g+'</svg>'
+    + '<div class="legend">'+legend+'</div>';
+  document.getElementById('charts').appendChild(div);
+}
+
+chart('首响延迟 vs 并发', 'ms', [
+  { label: '客户端端到端 p50', color: '#1f6feb', get: r => r.e2eFirstP50 },
+  { label: '客户端端到端 p99', color: '#79c0ff', get: r => r.e2eFirstP99 },
+  { label: '服务端 first_response p99', color: '#a371f7', get: r => r.srvFirstP99 },
+  { label: '服务端内核开销 p99', color: '#2ea043', get: r => r.srvKernelP99 },
+]);
+
+chart('打断时延 vs 并发', 'ms', [
+  { label: '客户端端到端打断 p99（含 VAD 滤波窗）', color: '#79c0ff', get: r => r.e2eBargeP99 },
+  { label: '内核取消 p99（200ms 预算口径）', color: '#f0883e', get: r => r.srvBargeP99 },
+], { budget: 200, budgetLabel: '200ms 预算' });
+
+chart('资源与降级 vs 并发', '%', [
+  { label: 'CPU 利用率', color: '#a371f7', get: r => r.cpuUtil >= 0 ? r.cpuUtil * 100 : null },
+  { label: '入口丢帧率', color: '#f85149', get: r => r.ingressDropRate >= 0 ? r.ingressDropRate * 100 : null },
+]);
+
+chart('吞吐 vs 并发', '每秒', [
+  { label: '轮速率（轮/s）', color: '#2ea043', get: r => r.serverTurnRate },
+  { label: '上行帧率 ÷ 100（帧/s）', color: '#6e7681', get: r => r.uplinkFPS >= 0 ? r.uplinkFPS / 100 : null },
+]);
+</script>
+</body>
+</html>
