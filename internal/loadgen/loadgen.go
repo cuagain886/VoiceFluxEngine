@@ -1,9 +1,7 @@
-// Package loadgen is the M10 load harness: it ramps concurrent virtual
-// sessions against a running voicestream server, drives the real hot path
-// (real frames through transport, dedup, VAD, rings, backpressure — models
-// mocked, per design D9), perturbs uplink arrival timing (netem-equivalent),
-// and collects the load/latency curve whose knee and degradation behaviour
-// are the L2 deliverable.
+// Package loadgen 是 M10 的负载 harness：它对一个运行中的 voicestream 服务器
+// ramp 并发的虚拟会话，驱动真实热路径（真帧穿过传输、去重、VAD、环、背压
+// ——模型走 mock，遵循设计 D9），扰动上行到达时序（netem 等价物），并采集
+// 那条负载/延迟曲线——其拐点与降级行为正是 L2 的交付物。
 package loadgen
 
 import (
@@ -16,27 +14,26 @@ import (
 	"time"
 )
 
-// Config parametrizes one ramp run. Zero values get sensible defaults from
-// normalize(); URL is mandatory.
+// Config 参数化一次 ramp 运行。零值会由 normalize() 取得合理默认；URL 必填。
 type Config struct {
 	URL        string // ws://host:port/ws
-	MetricsURL string // http://host:port/metrics; "" skips server-side scraping
+	MetricsURL string // http://host:port/metrics；"" 则跳过服务端抓取
 
-	Steps        []int         // concurrency ladder, e.g. 2,5,10,20,40,80
-	StepDuration time.Duration // measurement window per step
-	Warmup       time.Duration // settle time between scaling up and measuring
+	Steps        []int         // 并发阶梯，如 2,5,10,20,40,80
+	StepDuration time.Duration // 每步的测量窗口
+	Warmup       time.Duration // 扩容到测量之间的沉降时间
 
-	FrameInterval time.Duration // wall-clock uplink pacing (20ms = real time)
-	FrameDuration time.Duration // nominal PTS step per frame (20ms)
-	SampleRate    int           // PCM sample rate (16000)
-	SpeechFrames  int           // frames per utterance (30 = 600ms nominal)
+	FrameInterval time.Duration // 墙钟上行定速（20ms = 实时）
+	FrameDuration time.Duration // 每帧名义 PTS 步长（20ms）
+	SampleRate    int           // PCM 采样率（16000）
+	SpeechFrames  int           // 每句话的帧数（30 = 名义 600ms）
 
-	BargeEvery  int           // every Nth turn interrupts the response; 0 = never
-	BargeDelay  time.Duration // how long to ride the response before barging
-	QuietGap    time.Duration // downlink silence that ends a turn
-	TurnTimeout time.Duration // per-phase deadline; exceeding it is a recorded error
+	BargeEvery  int           // 每第 N 轮打断响应；0 = 从不
+	BargeDelay  time.Duration // 打断前先骑着响应多久
+	QuietGap    time.Duration // 结束一轮的下行静默时长
+	TurnTimeout time.Duration // 每阶段截止时间；超过即记一次错误
 
-	Netem Netem // uplink arrival-timing perturbation
+	Netem Netem // 上行到达时序扰动
 
 	Logger *slog.Logger
 
@@ -84,12 +81,10 @@ func (c *Config) normalize() error {
 
 func (c *Config) frameNominalUs() int64 { return c.FrameDuration.Microseconds() }
 
-// rampStagger spreads a step's new connections (and so their turn phases)
-// across the warmup window. Two birds: the server never sees a thundering
-// herd a real arrival process would not have, and — because the mock-driven
-// turns all take near-identical wall time — workers spawned in lockstep
-// would otherwise stay phase-locked forever, hammering the server in
-// synchronized waves whose peak demand says nothing about steady load.
+// rampStagger 把一步里新建的连接（以及它们的轮相位）摊开在整个 warmup 窗口
+// 上。一举两得：服务器永远不会遭遇一个真实到达过程不会产生的「惊群」；并且
+// ——因为 mock 驱动的轮墙钟时间几乎相同——同时入场的 worker 否则会永久
+// 相位锁定，以同步的波峰反复砸服务器，而那种波峰需求对稳态负载毫无意义。
 func (c *Config) rampStagger() time.Duration {
 	if c.Warmup < 100*time.Millisecond {
 		return c.Warmup/2 + time.Millisecond
@@ -100,19 +95,19 @@ func (c *Config) rampStagger() time.Duration {
 type sampleKind int
 
 const (
-	sampleFirst sampleKind = iota // last speech frame sent -> first downlink audio
-	sampleBarge                   // first interrupting frame sent -> BARGE_IN received
+	sampleFirst sampleKind = iota // 最后一帧说话发出 -> 第一帧下行音频
+	sampleBarge                   // 第一帧打断发出 -> 收到 BARGE_IN
 )
 
-// collector aggregates client-side observations for the step currently being
-// measured. Workers feed it from many goroutines.
+// collector 聚合「当前正在测量的那一步」的客户端侧观测。多个 worker
+// goroutine 一起向它喂数据。
 type collector struct {
 	framesSent atomic.Uint64
 	live       atomic.Int64
 
 	mu        sync.Mutex
 	measuring bool
-	first     []float64 // seconds
+	first     []float64 // 秒
 	barge     []float64
 	turns     int
 	errs      int
@@ -120,7 +115,7 @@ type collector struct {
 }
 
 func (c *collector) workerSpawn() { c.live.Add(1) }
-func (c *collector) workerExit() { c.live.Add(-1) }
+func (c *collector) workerExit()  { c.live.Add(-1) }
 
 func (c *collector) sample(k sampleKind, d time.Duration) {
 	c.mu.Lock()
@@ -153,7 +148,7 @@ func (c *collector) fail(phase string, err error) {
 	}
 }
 
-// window bounds one measurement interval.
+// beginWindow 划定一个测量区间的开始。
 func (c *collector) beginWindow() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -180,9 +175,9 @@ func (c *collector) endWindow(framesAtStart uint64) windowAgg {
 	}
 }
 
-// Run executes the ramp: for each step, scale the worker pool up, warm up,
-// measure for StepDuration (client samples + server /metrics deltas), and
-// emit one StepRecord. Workers persist across steps; the pool only grows.
+// Run 执行 ramp：每一步把 worker 池扩容、预热、测量 StepDuration（客户端
+// 样本 + 服务端 /metrics 差分），产出一条 StepRecord。worker 跨步存活；
+// 池只增不减。
 func Run(ctx context.Context, cfg Config) (*Report, error) {
 	if err := cfg.normalize(); err != nil {
 		return nil, err

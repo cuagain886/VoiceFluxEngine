@@ -9,23 +9,21 @@ import (
 
 const hubHistory = 50
 
-// Hub fans turn records out to dashboard subscribers over SSE. Publishing is
-// non-blocking by contract — it runs on the pipeline's orchestrator
-// goroutine, so a slow dashboard sheds events rather than stalling turns.
-// New subscribers get the recent history replayed so the waterfall is not
-// empty on open.
+// Hub 通过 SSE 把逐轮记录扇出给仪表盘订阅者。Publish 按契约是非阻塞的——
+// 它跑在流水线的编排器 goroutine 上，所以一个慢仪表盘会丢事件，而不是拖住
+// 轮。新订阅者会被回放近期历史，使瀑布图在打开时不至于空白。
 type Hub struct {
 	mu   sync.Mutex
 	subs map[chan []byte]struct{}
 	hist [][]byte
 }
 
-// NewHub returns an empty hub.
+// NewHub 返回一个空的 hub。
 func NewHub() *Hub {
 	return &Hub{subs: map[chan []byte]struct{}{}}
 }
 
-// Publish marshals v and delivers it to history and every subscriber.
+// Publish 把 v 序列化，投递进历史以及每个订阅者。
 func (h *Hub) Publish(v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -39,7 +37,7 @@ func (h *Hub) Publish(v any) {
 	for ch := range h.subs {
 		select {
 		case ch <- b:
-		default: // slow subscriber: shed, never block
+		default: // 慢订阅者：丢弃，绝不阻塞
 		}
 	}
 	h.mu.Unlock()
@@ -49,7 +47,7 @@ func (h *Hub) subscribe() chan []byte {
 	ch := make(chan []byte, 64)
 	h.mu.Lock()
 	for _, b := range h.hist {
-		ch <- b // fits: history < channel capacity
+		ch <- b // 装得下：历史长度 < channel 容量
 	}
 	h.subs[ch] = struct{}{}
 	h.mu.Unlock()
@@ -62,7 +60,7 @@ func (h *Hub) unsubscribe(ch chan []byte) {
 	h.mu.Unlock()
 }
 
-// ServeHTTP streams records as server-sent events.
+// ServeHTTP 以 server-sent events 流式输出记录。
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fl, ok := w.(http.Flusher)
 	if !ok {

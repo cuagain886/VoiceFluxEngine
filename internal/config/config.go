@@ -1,7 +1,5 @@
-// Package config defines the global runtime configuration for the voice
-// streaming kernel. It supports loading from a YAML file with environment
-// variable overrides, plus validation of invariants (e.g. ring buffer
-// capacities must be powers of two).
+// Package config 定义语音流式内核的全局运行时配置。它支持从 YAML 文件加载、
+// 用环境变量覆盖，并校验各项不变量（例如环形缓冲容量必须是 2 的幂）。
 package config
 
 import (
@@ -15,7 +13,7 @@ import (
 	"voicestream/internal/ringbuf"
 )
 
-// Config is the root runtime configuration for the engine.
+// Config 是引擎的根运行时配置。
 type Config struct {
 	Server      ServerConfig      `yaml:"server"`
 	Audio       AudioConfig       `yaml:"audio"`
@@ -27,48 +25,45 @@ type Config struct {
 	Peripherals PeripheralsConfig `yaml:"peripherals"`
 }
 
-// ServerConfig holds transport/server settings. StaticDir, when non-empty,
-// is served at "/" (the browser demo client); empty disables static serving.
+// ServerConfig 保存传输/服务器设置。StaticDir 非空时在 "/" 提供静态文件
+//（浏览器演示客户端）；为空则禁用静态服务。
 type ServerConfig struct {
 	Addr            string        `yaml:"addr"`
 	HeartbeatPeriod time.Duration `yaml:"heartbeat_period"`
 	StaticDir       string        `yaml:"static_dir"`
 }
 
-// AudioConfig describes the canonical internal audio format (v1 assumes the
-// client delivers PCM at this format directly; FFmpeg transcoding is deferred).
+// AudioConfig 描述内部规范音频格式（v1 假设客户端直接交付该格式的 PCM；
+// FFmpeg 转码被推迟）。
 type AudioConfig struct {
-	SampleRate    int           `yaml:"sample_rate"`    // e.g. 16000
-	FrameDuration time.Duration `yaml:"frame_duration"` // e.g. 20ms
-	Channels      int           `yaml:"channels"`       // 1 = mono
+	SampleRate    int           `yaml:"sample_rate"`    // 如 16000
+	FrameDuration time.Duration `yaml:"frame_duration"` // 如 20ms
+	Channels      int           `yaml:"channels"`       // 1 = 单声道
 	BitsPerSample int           `yaml:"bits_per_sample"`// 16
 }
 
-// RingBufConfig sizes the lock-free audio edge buffers. Capacities are in
-// frames and MUST be powers of two (validated) so the buffer can mask indices.
-// Policies pick the full-buffer behaviour per edge: "drop_oldest" (evict the
-// stalest frame, count it) or "reject" (refuse the write, backpressure).
+// RingBufConfig 设定无锁音频边缘缓冲的大小。容量以帧为单位、且必须是 2 的幂
+//（已校验），这样缓冲可以用掩码取下标。Policy 为每条边缘挑选满缓冲行为：
+// "drop_oldest"（驱逐最旧帧并计数）或 "reject"（拒绝写入、形成背压）。
 type RingBufConfig struct {
-	IngressCapacity int    `yaml:"ingress_capacity"` // transport -> ASR
-	EgressCapacity  int    `yaml:"egress_capacity"`  // TTS -> transport
+	IngressCapacity int    `yaml:"ingress_capacity"` // 传输 -> ASR
+	EgressCapacity  int    `yaml:"egress_capacity"`  // TTS -> 传输
 	IngressPolicy   string `yaml:"ingress_policy"`
 	EgressPolicy    string `yaml:"egress_policy"`
 }
 
-// PipelineConfig bounds the text-side channels between stages. These caps are
-// the memory bound AND the backpressure mechanism: a full channel blocks its
-// upstream stage (text must not be lost), propagating pressure back until it
-// surfaces as drop-oldest at the audio ingress ring.
+// PipelineConfig 限定阶段之间文本侧 channel 的容量。这些上限既是内存边界、
+// 又是背压机制：满 channel 阻塞其上游阶段（文本不可丢），把压力一路回传，
+// 直到在音频入口环上以 drop-oldest 显现。
 type PipelineConfig struct {
-	TokenChanCap      int `yaml:"token_chan_cap"`      // LLM -> TTS tokens
-	TranscriptChanCap int `yaml:"transcript_chan_cap"` // ASR finals -> orchestrator
-	AudioChanCap      int `yaml:"audio_chan_cap"`      // per-stage audio hop buffers
+	TokenChanCap      int `yaml:"token_chan_cap"`      // LLM -> TTS 的 token
+	TranscriptChanCap int `yaml:"transcript_chan_cap"` // ASR finals -> 编排器
+	AudioChanCap      int `yaml:"audio_chan_cap"`      // 每阶段音频跳点缓冲
 }
 
-// VADConfig holds the inline energy-VAD thresholds and jitter filters.
-// EnergyThreshold is the enter (speech) threshold; ExitThreshold the lower
-// stay-in-speech threshold — the gap between them is the hysteresis that
-// suppresses flutter around a single line (双门限).
+// VADConfig 保存内联能量 VAD 的门限与抖动滤波参数。EnergyThreshold 是进入
+//（说话）门限；ExitThreshold 是更低的「维持说话」门限——两者之间的间隙就是
+// 抑制在单条线附近抖动的滞回（双门限）。
 type VADConfig struct {
 	EnergyThreshold float64       `yaml:"energy_threshold"`
 	ExitThreshold   float64       `yaml:"exit_threshold"`
@@ -76,16 +71,15 @@ type VADConfig struct {
 	Hangover        time.Duration `yaml:"hangover"`
 }
 
-// SessionConfig holds session lifecycle and reconnect settings. Over a
-// single WS/TCP connection frames are in-order, so there is no in-session
-// reorder window; reconnect-replay dedup uses a sequence watermark, which a
-// TCP-ordered stream makes sufficient (no window needed). IdleTimeout doubles
-// as the reconnect grace window: a detached session lives this long.
+// SessionConfig 保存会话生命周期与重连设置。单条 WS/TCP 连接上帧是有序的，
+// 所以没有会话内重排窗口；重连重放去重用一条序列号水位即可（TCP 的有序性
+// 让它充分，无需窗口）。IdleTimeout 兼作重连宽限期：一个脱离附着的会话能
+// 活这么久。
 type SessionConfig struct {
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
 }
 
-// AdaptersConfig selects the model adapter implementations per stage.
+// AdaptersConfig 为每个阶段选择模型适配器实现。
 type AdaptersConfig struct {
 	ASR string `yaml:"asr"` // "mock" | "cloud" | ...
 	LLM string `yaml:"llm"` // "mock" | "openai-compat"
@@ -95,28 +89,26 @@ type AdaptersConfig struct {
 	Mock     MockAdaptersConfig `yaml:"mock"`
 }
 
-// MockAdaptersConfig injects latency into the built-in mock adapters so the
-// load harness can shape realistic turn timing (a zero-latency mock completes
-// a turn near-instantly, leaving no in-flight window to barge into). All
-// values default to zero: the mocks stay instant unless asked otherwise.
+// MockAdaptersConfig 给内建 mock 适配器注入时延，让负载 harness 能塑造真实的
+// 轮时序（零延迟的 mock 会近乎瞬间完成一轮，留不下可供打断的「在飞」窗口）。
+// 所有值默认为零：除非显式要求，mock 保持瞬时。
 type MockAdaptersConfig struct {
-	ASRFinalDelay  time.Duration `yaml:"asr_final_delay"` // before the final transcript
-	LLMTokenDelay  time.Duration `yaml:"llm_token_delay"` // before each token
+	ASRFinalDelay  time.Duration `yaml:"asr_final_delay"` // final 转写之前
+	LLMTokenDelay  time.Duration `yaml:"llm_token_delay"` // 每个 token 之前
 	LLMTokenJitter time.Duration `yaml:"llm_token_jitter"`
-	TTSFrameDelay  time.Duration `yaml:"tts_frame_delay"` // before each synthesized frame
+	TTSFrameDelay  time.Duration `yaml:"tts_frame_delay"` // 每帧合成之前
 }
 
-// CloudLLMConfig points the "openai-compat" LLM adapter at any OpenAI-style
-// chat-completions endpoint (DeepSeek, Qwen, Moonshot, OpenAI, ...). The API
-// key is never stored in the file: APIKeyEnv names the environment variable
-// that holds it.
+// CloudLLMConfig 把 "openai-compat" LLM 适配器指向任意 OpenAI 风格的
+// chat-completions 端点（DeepSeek、Qwen、Moonshot、OpenAI…）。API key 绝不
+// 存进文件：APIKeyEnv 指明持有它的环境变量名。
 type CloudLLMConfig struct {
 	BaseURL   string `yaml:"base_url"`
 	Model     string `yaml:"model"`
 	APIKeyEnv string `yaml:"api_key_env"`
 }
 
-// PeripheralsConfig toggles optional, non-hot-path external systems.
+// PeripheralsConfig 开关可选的、不在热路径上的外部系统。
 type PeripheralsConfig struct {
 	RedisEnabled bool   `yaml:"redis_enabled"`
 	RedisAddr    string `yaml:"redis_addr"`
@@ -124,9 +116,8 @@ type PeripheralsConfig struct {
 	KafkaBrokers string `yaml:"kafka_brokers"`
 }
 
-// Default returns a configuration with sensible defaults for local dev:
-// WebSocket on :8080, 16kHz/16-bit/mono audio in 20ms frames, all model
-// adapters mocked, optional peripherals disabled.
+// Default 返回一份适合本地开发的合理默认配置：WebSocket 监听 :8080，
+// 16kHz/16 位/单声道音频、20ms 一帧，所有模型适配器走 mock，可选外设关闭。
 func Default() Config {
 	return Config{
 		Server: ServerConfig{
@@ -175,8 +166,7 @@ func Default() Config {
 	}
 }
 
-// Load reads a YAML config file over the defaults, then applies environment
-// overrides, then validates the result.
+// Load 在默认值之上读入一个 YAML 配置文件，再施加环境变量覆盖，最后校验结果。
 func Load(path string) (Config, error) {
 	cfg := Default()
 	data, err := os.ReadFile(path)
@@ -193,8 +183,8 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// applyEnvOverrides lets a few high-value settings be overridden from the
-// environment (handy for containers and quick local runs).
+// applyEnvOverrides 允许少数高价值设置从环境变量覆盖（便于容器和快速本地
+// 运行）。
 func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("VOICESTREAM_ADDR"); v != "" {
 		c.Server.Addr = v
@@ -210,7 +200,7 @@ func (c *Config) applyEnvOverrides() {
 	}
 }
 
-// Validate checks configuration invariants required by the engine.
+// Validate 检查引擎所要求的各项配置不变量。
 func (c Config) Validate() error {
 	if c.Server.Addr == "" {
 		return fmt.Errorf("server.addr must not be empty")

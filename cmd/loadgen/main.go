@@ -1,11 +1,13 @@
-// Command loadgen is the M10 load harness: it ramps concurrent virtual
-// sessions against a running voicestream server and writes the capacity
-// curve (CSV / JSON / self-contained HTML) plus a knee analysis.
+// Command loadgen 是 M10 的负载 harness：它对一个运行中的 voicestream 服务器
+// ramp 并发的虚拟会话，写出容量曲线（CSV / JSON / 自包含 HTML）以及一份拐点
+// 分析。
 //
-// Typical run (server first, with mock latencies shaped for load testing):
+// 典型运行（先起服务器，mock 时延为压测塑形）：
 //
 //	$env:VOICESTREAM_CONFIG = "configs/loadtest.yaml"; go run ./cmd/server
 //	go run ./cmd/loadgen -steps 2,5,10,20,40,80,160,320 -out docs/load
+//
+// （下面的 flag 帮助文本保留英文，遵循 CLI 惯例。）
 package main
 
 import (

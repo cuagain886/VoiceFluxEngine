@@ -1,10 +1,10 @@
-// Package openaicompat implements the adapter.LLM interface over any
-// OpenAI-compatible chat-completions endpoint with SSE streaming (DeepSeek,
-// Qwen, Moonshot, OpenAI, ...). It registers itself as "openai-compat";
-// importing it (blank import in cmd/server) makes it selectable from config.
+// Package openaicompat 在任何「OpenAI 兼容」的 chat-completions 端点上、以
+// SSE 流式方式实现 adapter.LLM 接口（DeepSeek、Qwen、Moonshot、OpenAI…）。
+// 它把自己注册为 "openai-compat"；导入它（cmd/server 里的空白导入）即可让它
+// 在配置中可选。
 //
-// The SSE client is hand-rolled on net/http: a streaming protocol parser is
-// exactly this project's business, and it keeps the dependency surface zero.
+// SSE 客户端是基于 net/http 手写的：流式协议解析器恰恰是本项目的题中之义，
+// 而且这样保持依赖面为零。
 package openaicompat
 
 import (
@@ -37,7 +37,7 @@ func init() {
 	})
 }
 
-// LLM streams chat completions from an OpenAI-compatible endpoint.
+// LLM 从一个 OpenAI 兼容端点流式获取 chat completions。
 type LLM struct {
 	baseURL string
 	model   string
@@ -45,23 +45,23 @@ type LLM struct {
 	client  *http.Client
 }
 
-// New returns an adapter for the given endpoint. baseURL is the API root
-// (e.g. "https://api.deepseek.com/v1"); the path /chat/completions is
-// appended per the OpenAI wire convention.
+// New 返回针对给定端点的适配器。baseURL 是 API 根（如
+// "https://api.deepseek.com/v1"）；路径 /chat/completions 按 OpenAI 线路
+// 约定追加在后面。
 func New(baseURL, model, apiKey string) *LLM {
 	return &LLM{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		model:   model,
 		apiKey:  apiKey,
-		// No overall timeout: streams are long-lived and cancellation comes
-		// from ctx (barge-in). The dial is bounded separately.
+		// 不设整体超时：流是长生命周期的，取消来自 ctx（打断）。拨号超时
+		// 另行限定。
 		client: &http.Client{Transport: &http.Transport{
 			ResponseHeaderTimeout: 30 * time.Second,
 		}},
 	}
 }
 
-// Request/response wire shapes (the subset we use).
+// 请求/响应的线路结构（只取我们用到的子集）。
 type chatRequest struct {
 	Model    string        `json:"model"`
 	Stream   bool          `json:"stream"`
@@ -82,10 +82,9 @@ type chatChunk struct {
 	} `json:"choices"`
 }
 
-// Stream implements adapter.LLM. It emits each SSE delta as one Token and
-// returns when the server sends [DONE], the stream ends, or ctx is cancelled
-// — cancellation aborts the underlying HTTP request, so the connection (and
-// the provider's generation) stops promptly, which is what barge-in needs.
+// Stream 实现 adapter.LLM。它把每个 SSE delta 作为一个 Token 产出，在服务器
+// 发来 [DONE]、流结束、或 ctx 被取消时返回——取消会中止底层 HTTP 请求，于是
+// 连接（以及服务商那边的生成）及时停止，这正是打断所需要的。
 func (l *LLM) Stream(ctx context.Context, turn adapter.Turn, out chan<- adapter.Token) error {
 	msgs := make([]chatMessage, 0, len(turn.History)+1)
 	for _, m := range turn.History {
@@ -121,7 +120,7 @@ func (l *LLM) Stream(ctx context.Context, turn adapter.Turn, out chan<- adapter.
 	for sc.Scan() {
 		data, ok := strings.CutPrefix(sc.Text(), "data:")
 		if !ok {
-			continue // blank keep-alive lines, ": comments", "event:" fields
+			continue // 空的保活行、": 注释"、"event:" 字段
 		}
 		data = strings.TrimSpace(data)
 		if data == "[DONE]" {
@@ -142,8 +141,8 @@ func (l *LLM) Stream(ctx context.Context, turn adapter.Turn, out chan<- adapter.
 			}
 		}
 	}
-	// Body read errors surface here — including the abort caused by ctx
-	// cancellation mid-stream, which we report as the cancellation it is.
+	// 读 body 的错误在此浮现——包括流中途因 ctx 取消导致的中止，我们把它
+	// 如实报告为「取消」。
 	if err := sc.Err(); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()

@@ -12,12 +12,12 @@ import (
 	"time"
 )
 
-// snapshot is one parse of a Prometheus text exposition: scalar samples by
-// name, histogram buckets by name -> upper bound -> cumulative count.
+// snapshot 是对一次 Prometheus 文本暴露的一次解析：按名字索引的标量样本，
+// 以及按 名字 -> 上界 -> 累积计数 索引的直方图桶。
 type snapshot struct {
 	at      time.Time
 	scalars map[string]float64
-	hists   map[string]map[float64]float64 // cumulative, as exposed
+	hists   map[string]map[float64]float64 // 累积值，如暴露的那样
 }
 
 func scrape(ctx context.Context, url string) (*snapshot, error) {
@@ -71,7 +71,7 @@ func parseLine(snap *snapshot, line string) {
 	snap.scalars[key] = val
 }
 
-// bucketKey recognizes `name_bucket{le="0.05"}` keys.
+// bucketKey 识别形如 `name_bucket{le="0.05"}` 的键。
 func bucketKey(key string) (name string, le float64, ok bool) {
 	i := strings.Index(key, `_bucket{le="`)
 	if i < 0 || !strings.HasSuffix(key, `"}`) {
@@ -90,13 +90,13 @@ func bucketKey(key string) (name string, le float64, ok bool) {
 
 var inf = math.Inf(1)
 
-// scalarDelta returns the increase of a counter between two snapshots.
+// scalarDelta 返回一个计数器在两次快照之间的增量。
 func scalarDelta(s0, s1 *snapshot, name string) float64 {
 	return s1.scalars[name] - s0.scalars[name]
 }
 
-// histDelta returns the per-window histogram: sorted upper bounds and the
-// (non-cumulative) count landed in each bucket during the window.
+// histDelta 返回「本窗口」的直方图：排好序的上界，以及窗口期间落入每个桶的
+//（非累积）计数。
 func histDelta(s0, s1 *snapshot, name string) (bounds []float64, counts []float64) {
 	h1 := s1.hists[name]
 	if h1 == nil {
@@ -119,10 +119,9 @@ func histDelta(s0, s1 *snapshot, name string) (bounds []float64, counts []float6
 	return bounds, counts
 }
 
-// histQuantile estimates quantile q (0..1) from a bucketed histogram using
-// linear interpolation inside the target bucket (the standard Prometheus
-// histogram_quantile method). Returns -1 when the histogram is empty. A
-// result clamped at the highest finite bound means "at least this much".
+// histQuantile 用「目标桶内线性插值」从分桶直方图估计分位数 q（0..1）
+//（标准的 Prometheus histogram_quantile 方法）。直方图为空时返回 -1。结果被
+// 钳制在最高有限上界，意为「至少这么多」。
 func histQuantile(bounds, counts []float64, q float64) float64 {
 	total := 0.0
 	for _, c := range counts {
@@ -142,7 +141,7 @@ func histQuantile(bounds, counts []float64, q float64) float64 {
 			}
 			upper := bounds[i]
 			if upper == inf {
-				// Observation beyond the last finite bound: report that bound.
+				// 观测落在最后一个有限上界之外：就报告那个上界。
 				return lower
 			}
 			if c <= 0 {

@@ -16,11 +16,9 @@ import (
 	"voicestream/internal/transport/transportpb"
 )
 
-// worker is one virtual caller: it dials the server, performs the M8
-// handshake, then loops conversation turns at real(istic)-time pacing — the
-// uplink stream stays continuous (speech and silence frames alike), exactly
-// like the browser client, so every frame crosses the real hot path:
-// transport decode, dedup watermark, inline VAD, ingress ring, pipeline.
+// worker 是一个虚拟来电者：它拨号、做 M8 握手，然后以近实时节拍循环对话轮
+// ——上行流保持连续（说话帧与静音帧一视同仁），与浏览器客户端完全一致，
+// 所以每一帧都穿过真实热路径：传输解码、去重水位、内联 VAD、入口环、流水线。
 type worker struct {
 	id  int
 	cfg *Config
@@ -35,14 +33,13 @@ type worker struct {
 	tsUs int64
 }
 
-// downlink is the reader goroutine's view of the connection, consumed by the
-// turn loop. Event stamps are taken at frame *arrival* so measurements do not
-// depend on when the turn loop gets around to draining the channels.
+// downlink 是读 goroutine 对连接的视角，由轮循环消费。事件时间戳在帧*到达*
+// 时采集，于是测量不依赖轮循环何时来抽干这些 channel。
 type downlink struct {
 	lastAudioNs atomic.Int64
-	audioC      chan time.Time // arrival times of AUDIO frames; lossy (cap 8)
-	bargeC      chan time.Time // arrival times of BARGE_IN controls
-	errC        chan error     // terminal read error (cap 1)
+	audioC      chan time.Time // AUDIO 帧的到达时刻；有损（cap 8）
+	bargeC      chan time.Time // BARGE_IN 控制的到达时刻
+	errC        chan error     // 终止性读错误（cap 1）
 }
 
 func newDownlink() *downlink {
@@ -60,8 +57,8 @@ func (d *downlink) fail(err error) {
 	}
 }
 
-// pcmFrame builds one 20ms-equivalent PCM frame at a constant amplitude; the
-// inline energy VAD sees RMS == amplitude.
+// pcmFrame 以恒定幅度构建一个等价于 20ms 的 PCM 帧；内联能量 VAD 看到的
+// RMS == 幅度。
 func pcmFrame(samples int, amplitude float64) []byte {
 	buf := make([]byte, samples*2)
 	v := uint16(int16(amplitude * 32767))
@@ -73,7 +70,7 @@ func pcmFrame(samples int, amplitude float64) []byte {
 
 func (w *worker) run(ctx context.Context) {
 	defer w.col.workerExit()
-	// Random phase offset so a step's workers do not speak in lockstep.
+	// 随机相位偏移，让一步里的 worker 不会齐步说话。
 	if !sleepUntil(ctx, time.Now().Add(time.Duration(w.rng.Int64N(int64(w.cfg.rampStagger()))))) {
 		return
 	}
@@ -96,18 +93,17 @@ func (w *worker) run(ctx context.Context) {
 		barge := w.cfg.BargeEvery > 0 && turnNo%w.cfg.BargeEvery == 0
 		if err := w.turn(ctx, barge); err != nil {
 			if ctx.Err() != nil {
-				return // shutdown, not a failure
+				return // 是关停，不是失败
 			}
 			var to *timeoutError
 			if errors.As(err, &to) {
 				w.col.fail(to.phase, err)
-				// Resync before the next turn: swallow whatever late
-				// response eventually limps in, or its audio would
-				// masquerade as the next turn's first response and fake a
-				// fast sample. Best effort — a second timeout moves on.
+				// 开下一轮前先重对齐：吞掉最终蹒跚而来的迟到响应，否则它的
+				// 音频会冒充下一轮的首响、产出一个虚假的快样本。尽力而为
+				// ——这里再来一次超时就放过。
 				_ = w.silenceUntilQuiet(ctx, w.cfg.silencePCM)
 				drainTimes(w.dl.bargeC)
-				continue // stay connected; keep loading the server
+				continue // 保持连接；继续给服务器加压
 			}
 			w.col.fail("conn", err)
 			return
@@ -116,8 +112,8 @@ func (w *worker) run(ctx context.Context) {
 	}
 }
 
-// netemFor applies the configured perturbation to this worker. Seed is
-// derived per worker so jitter schedules differ but stay reproducible.
+// netemFor 把配置的扰动施加到这个 worker 上。种子按 worker 派生，使抖动表
+// 各不相同但仍可复现。
 func (w *worker) netemFor() Netem {
 	n := w.cfg.Netem
 	n.Seed = n.Seed*31 + uint64(w.id) + 1
@@ -133,7 +129,7 @@ func (w *worker) connect(ctx context.Context) error {
 	w.conn = c
 	w.dl = newDownlink()
 
-	// Handshake: START with a fresh session, expect the START ack.
+	// 握手：用全新会话发 START，期待 START ack。
 	payload, err := proto.Marshal(&transportpb.ControlPayload{
 		Kind: transportpb.ControlKind_CONTROL_KIND_START, Epoch: 1,
 	})
@@ -181,10 +177,9 @@ func (w *worker) writeFrame(ctx context.Context, f transport.Frame) error {
 	return w.conn.Write(ctx, websocket.MessageBinary, buf)
 }
 
-// sendAudio sends one paced uplink frame. TsUs advances on the nominal frame
-// duration (the audio sample clock), independent of wall pacing, so the
-// kernel sees a consistent PTS stream even when the harness runs faster than
-// real time (tests) or frames are netem-delayed.
+// sendAudio 发送一个定速的上行帧。TsUs 按名义帧时长（音频采样时钟）推进、
+// 独立于墙钟节拍，于是即便 harness 跑得比实时快（测试）或帧被 netem 延迟，
+// 内核看到的也是一条一致的 PTS 流。
 func (w *worker) sendAudio(ctx context.Context, pcm []byte) error {
 	if !w.clk.wait(ctx) {
 		return ctx.Err()
@@ -202,8 +197,8 @@ func (w *worker) sendAudio(ctx context.Context, pcm []byte) error {
 	return nil
 }
 
-// readLoop drains the downlink for the lifetime of the connection: stamps
-// audio arrivals, surfaces BARGE_IN controls and terminal errors.
+// readLoop 在连接的整个生命周期里抽干下行：给音频到达盖戳，浮现 BARGE_IN
+// 控制与终止性错误。
 func (w *worker) readLoop(ctx context.Context) {
 	for {
 		typ, data, err := w.conn.Read(ctx)
@@ -225,7 +220,7 @@ func (w *worker) readLoop(ctx context.Context) {
 			w.dl.lastAudioNs.Store(now.UnixNano())
 			select {
 			case w.dl.audioC <- now:
-			default: // turn loop only needs the first arrival; rest coalesce
+			default: // 轮循环只需要第一帧的到达；其余合并
 			}
 		case transportpb.FrameType_FRAME_TYPE_CONTROL:
 			var cp transportpb.ControlPayload
@@ -248,26 +243,23 @@ func (w *worker) readLoop(ctx context.Context) {
 	}
 }
 
-// timeoutError marks a phase that exceeded TurnTimeout — a *measurement*
-// (the system degraded past the deadline), not a harness defect; the worker
-// records it and keeps loading.
+// timeoutError 标记一个超过 TurnTimeout 的阶段——这是一个*测量值*（系统已
+// 降级到超出截止），不是 harness 缺陷；worker 记录它并继续加压。
 type timeoutError struct{ phase string }
 
 func (e *timeoutError) Error() string { return "loadgen: timeout waiting for " + e.phase }
 
-// turn drives one conversation round:
+// turn 驱动一个对话轮：
 //
-//	speech ... silence ──▶ first downlink audio   (client e2e first response)
-//	[barge turns] ride the response, speak over it ──▶ BARGE_IN control
-//	                                              (client e2e barge-in)
-//	silence until the downlink goes quiet ──▶ next turn
+//	说话 ... 静音 ──▶ 第一帧下行音频        （客户端端到端首响）
+//	[打断轮] 骑着响应、对着它说话 ──▶ BARGE_IN 控制（客户端端到端打断）
+//	静音直到下行安静 ──▶ 下一轮
 func (w *worker) turn(ctx context.Context, barge bool) error {
 	speech := w.cfg.speechPCM
 	silence := w.cfg.silencePCM
 
-	// Phase 1: the utterance. The first-response t0 is the last speech
-	// frame's *ideal* slot — when the simulated user stopped speaking —
-	// so netem delay and send backlog count into the e2e measurement.
+	// 阶段 1：这句话。首响 t0 取最后一帧说话的*理想*时隙——即模拟用户停止
+	// 说话的时刻——于是 netem 延迟与发送积压都计入端到端测量。
 	for i := 0; i < w.cfg.SpeechFrames; i++ {
 		if err := w.sendAudio(ctx, speech); err != nil {
 			return err
@@ -275,7 +267,7 @@ func (w *worker) turn(ctx context.Context, barge bool) error {
 	}
 	spokeAt := w.clk.lastIdeal
 
-	// Phase 2: silence (VAD hangover runs server-side) until the response.
+	// 阶段 2：静音（VAD hangover 在服务端跑）直到响应到来。
 	firstAt, err := w.silenceUntilAudioAfter(ctx, spokeAt, silence)
 	if err != nil {
 		return err
@@ -283,14 +275,13 @@ func (w *worker) turn(ctx context.Context, barge bool) error {
 	w.col.sample(sampleFirst, firstAt.Sub(spokeAt))
 
 	if barge {
-		// Ride the response briefly so the barge lands mid-flight.
+		// 先骑着响应一小会儿，让打断落在响应进行中途。
 		if err := w.silenceFor(ctx, silence, w.cfg.BargeDelay); err != nil {
 			return err
 		}
 		drainTimes(w.dl.bargeC)
-		bargeStart := w.clk.peekIdeal() // when the user opens their mouth
-		// Speak over the agent; a full utterance, so it also becomes the
-		// next prompt.
+		bargeStart := w.clk.peekIdeal() // 用户张嘴的时刻
+		// 盖过 Agent 说话；是完整一句，所以它也成为下一轮的 prompt。
 		for i := 0; i < w.cfg.SpeechFrames; i++ {
 			if err := w.sendAudio(ctx, speech); err != nil {
 				return err
@@ -302,10 +293,9 @@ func (w *worker) turn(ctx context.Context, barge bool) error {
 			return err
 		}
 		w.col.sample(sampleBarge, bargeAt.Sub(bargeStart))
-		// The interrupting utterance gets its own response. Stale audio of
-		// the cancelled turn cannot pollute this wait: the kernel queues the
-		// BARGE_IN control *after* the flushed turn's frames, so anything
-		// arriving after bargeAt belongs to the new turn.
+		// 这句打断的话拿到自己的响应。被取消那一轮的陈旧音频污染不了这次
+		// 等待：内核把 BARGE_IN 控制排在被 flush 的那轮帧*之后*，所以 bargeAt
+		// 之后到达的任何东西都属于新一轮。
 		firstAt, err := w.silenceUntilAudioAfter(ctx, bargeAt, silence)
 		if err != nil {
 			return err
@@ -313,12 +303,12 @@ func (w *worker) turn(ctx context.Context, barge bool) error {
 		w.col.sample(sampleFirst, firstAt.Sub(spokeAt))
 	}
 
-	// Phase 3: let the response finish — downlink quiet for QuietGap.
+	// 阶段 3：让响应播完——下行安静 QuietGap。
 	return w.silenceUntilQuiet(ctx, silence)
 }
 
-// silenceUntilAudioAfter paces silence frames until an AUDIO frame arriving
-// at or after the `after` mark shows up. Returns its arrival time.
+// silenceUntilAudioAfter 定速发静音帧，直到出现一个在 `after` 标记之后到达
+// 的 AUDIO 帧。返回它的到达时刻。
 func (w *worker) silenceUntilAudioAfter(ctx context.Context, after time.Time, silence []byte) (time.Time, error) {
 	deadline := time.Now().Add(w.cfg.TurnTimeout)
 	for {
@@ -340,7 +330,7 @@ func (w *worker) silenceUntilAudioAfter(ctx context.Context, after time.Time, si
 	}
 }
 
-// silenceFor paces silence frames for roughly d of wall time.
+// silenceFor 定速发静音帧约 d 这么长的墙钟时间。
 func (w *worker) silenceFor(ctx context.Context, silence []byte, d time.Duration) error {
 	until := time.Now().Add(d)
 	for time.Now().Before(until) {
@@ -351,9 +341,8 @@ func (w *worker) silenceFor(ctx context.Context, silence []byte, d time.Duration
 	return nil
 }
 
-// awaitBarge paces silence until the BARGE_IN control (sent when the kernel
-// finished cancelling the turn) arrives. Accepts stamps from `after` on —
-// the control may already have landed while we were still speaking.
+// awaitBarge 定速发静音直到 BARGE_IN 控制（内核取消完那一轮时发出）到达。
+// 接受 `after` 起的时间戳——该控制可能在我们还在说话时就已经落地了。
 func (w *worker) awaitBarge(ctx context.Context, silence []byte, after time.Time) (time.Time, error) {
 	deadline := time.Now().Add(w.cfg.TurnTimeout)
 	for {
@@ -375,8 +364,8 @@ func (w *worker) awaitBarge(ctx context.Context, silence []byte, after time.Time
 	}
 }
 
-// silenceUntilQuiet paces silence until no downlink audio has arrived for
-// QuietGap — the turn's response has fully played out.
+// silenceUntilQuiet 定速发静音，直到已有 QuietGap 这么久没有下行音频到达
+// ——即这一轮的响应已经完全播完。
 func (w *worker) silenceUntilQuiet(ctx context.Context, silence []byte) error {
 	deadline := time.Now().Add(w.cfg.TurnTimeout)
 	for {

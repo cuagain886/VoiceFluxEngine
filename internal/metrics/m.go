@@ -7,14 +7,13 @@ import (
 	"voicestream/internal/pipeline"
 )
 
-// latencyBuckets cover the conversational range: 5ms .. 5s.
+// latencyBuckets 覆盖对话尺度的范围：5ms .. 5s。
 var latencyBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2, 5}
 
-// cancelBuckets cover the barge-in budget: 1ms .. 500ms (budget is 200ms).
+// cancelBuckets 覆盖打断预算：1ms .. 500ms（预算是 200ms）。
 var cancelBuckets = []float64{0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5}
 
-// M bundles the kernel's standard instruments, the scrape registry and the
-// dashboard hub. One per process.
+// M 把内核的标准仪表、抓取注册表和仪表盘 hub 打成一束。每进程一个。
 type M struct {
 	Registry *Registry
 	Hub      *Hub
@@ -22,16 +21,16 @@ type M struct {
 	TurnsCompleted *Counter
 	TurnsCancelled *Counter
 
-	FirstResponse  *Histogram // utterance end -> first downlink frame
-	KernelOverhead *Histogram // FirstResponse minus model spans
-	StageASRFinal  *Histogram // utterance end -> final transcript
-	StageQueueWait *Histogram // final produced -> turn picked up
-	StageLLMFirst  *Histogram // LLM start -> first token
-	StageTTSFirst  *Histogram // first token to TTS -> first frame
-	BargeInCancel  *Histogram // cancel requested -> sub-chain down + flushed
+	FirstResponse  *Histogram // 语句结束 -> 第一帧下行
+	KernelOverhead *Histogram // 首响减去模型跨度
+	StageASRFinal  *Histogram // 语句结束 -> final 转写
+	StageQueueWait *Histogram // final 产出 -> 轮被领取
+	StageLLMFirst  *Histogram // LLM 开始 -> 第一个 token
+	StageTTSFirst  *Histogram // 第一个 token 进 TTS -> 第一帧
+	BargeInCancel  *Histogram // 取消发起 -> 子链停止 + 排空完成
 
-	// Frame-hygiene totals accumulated from sessions when they are
-	// reclaimed; live values are added at scrape time via gauge funcs.
+	// 帧卫生总量：会话被回收时累加进来；活动会话的实时值在抓取期通过
+	// gauge func 加上。
 	AccIngressDropped atomic.Uint64
 	AccEgressDropped  atomic.Uint64
 	AccDupFrames      atomic.Uint64
@@ -40,7 +39,7 @@ type M struct {
 	AccIllegalEvents  atomic.Uint64
 }
 
-// New builds the process-wide instrument set.
+// New 构建进程级的仪表集合。
 func New() *M {
 	r := NewRegistry()
 	registerRuntimeGauges(r)
@@ -59,16 +58,15 @@ func New() *M {
 	}
 }
 
-// TurnRecord is the dashboard's per-turn waterfall datum. All *Ms fields are
-// milliseconds relative to utterance end (t0); -1 marks an absent boundary
-// (e.g. a turn cancelled before TTS produced anything).
+// TurnRecord 是仪表盘的逐轮瀑布数据点。所有 *Ms 字段都是相对语句结束（t0）
+// 的毫秒数；-1 标记一个缺失的边界（例如某轮在 TTS 产出任何东西之前就被取消）。
 type TurnRecord struct {
 	Session   string  `json:"session"`
-	Time      string  `json:"time"` // wall clock, HH:MM:SS
+	Time      string  `json:"time"` // 墙钟，HH:MM:SS
 	Prompt    string  `json:"prompt"`
 	Reply     string  `json:"reply"`
 	Cancelled bool    `json:"cancelled"`
-	WallMs    float64 `json:"wallMs"` // t0 -> turn end
+	WallMs    float64 `json:"wallMs"` // t0 -> 轮结束
 
 	ASRFinalMs      float64 `json:"asrFinalMs"`
 	LLMStartMs      float64 `json:"llmStartMs"`
@@ -81,14 +79,13 @@ type TurnRecord struct {
 	FirstResponseMs float64 `json:"firstResponseMs"`
 	KernelMs        float64 `json:"kernelMs"`
 	BargeInMs       float64 `json:"bargeInMs"`
-	// SerialMs is what a naive sequential ASR->LLM->TTS run of the same
-	// spans would have taken — the dashboard's overlap comparison bar.
+	// SerialMs 是同样三段跨度若改为朴素串行 ASR->LLM->TTS 跑会花的时间——
+	// 也就是仪表盘的「重叠对照」条。
 	SerialMs float64 `json:"serialMs"`
 }
 
-// RecordTurn feeds one finished turn into histograms and the dashboard hub.
-// It runs on the pipeline orchestrator goroutine: everything below is
-// atomics, arithmetic and a non-blocking publish.
+// RecordTurn 把一个完成的轮喂进直方图与仪表盘 hub。它跑在流水线编排器
+// goroutine 上：下面的一切都是原子操作、算术、和一次非阻塞 publish。
 func (m *M) RecordTurn(sessionID string, ts pipeline.TurnStats) {
 	if ts.Cancelled {
 		m.TurnsCancelled.Add(1)
@@ -135,7 +132,7 @@ func toRecord(sessionID string, ts pipeline.TurnStats) TurnRecord {
 		KernelMs:        float64(ts.KernelOverhead().Microseconds()) / 1000,
 		BargeInMs:       float64(ts.BargeInLatency.Microseconds()) / 1000,
 	}
-	// Naive serial = each stage's full span, one after another.
+	// 朴素串行 = 每个阶段的完整跨度，首尾相接。
 	if rec.ASRFinalMs >= 0 && rec.LLMLastTokenMs >= 0 && rec.LLMStartMs >= 0 {
 		serial := rec.ASRFinalMs + (rec.LLMLastTokenMs - rec.LLMStartMs)
 		if rec.TTSLastFrameMs >= 0 && rec.TTSStartMs >= 0 {

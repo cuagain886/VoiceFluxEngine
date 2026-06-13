@@ -5,10 +5,9 @@ import (
 	"strings"
 )
 
-// HTML renders a self-contained capacity-curve page: the run's records are
-// inlined as JSON and drawn as SVG polylines by ~100 lines of vanilla JS.
-// No external assets — the file works from disk, in CI artifacts, in a
-// README link.
+// HTML 渲染一个自包含的容量曲线页面：本次运行的记录以 JSON 内联，由约 100
+// 行原生 JS 画成 SVG 折线。无任何外部资源——这个文件能从磁盘、CI 工件、
+// README 链接里直接打开。
 func (r *Report) HTML() (string, error) {
 	data, err := json.Marshal(r)
 	if err != nil {

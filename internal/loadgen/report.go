@@ -10,21 +10,20 @@ import (
 	"time"
 )
 
-// StepRecord is one point on the capacity curve. Latencies are milliseconds;
-// -1 means "no data" (no samples in the window, or scraping disabled).
+// StepRecord 是容量曲线上的一个点。延迟单位是毫秒；-1 表示「无数据」
+//（窗口内无样本，或抓取被禁用）。
 //
-// Two vantage points, deliberately both kept:
-//   - E2E*: client-observed wall time (includes VAD hangover/min-speech,
-//     network, playout of the measurement itself) — what a user would feel.
-//   - Srv*: server-side histograms diffed across the window — the kernel's
-//     own accounting (first response from utterance end; barge-in cancel
-//     from cancel request, the 200ms-budget metric).
+// 刻意保留两个观测视角：
+//   - E2E*：客户端观测到的墙钟时间（含 VAD hangover/min-speech、网络、本次
+//     测量自身的播放）——用户会感受到的。
+//   - Srv*：服务端直方图在窗口两端做差——内核自己的账目（首响从语句结束起算；
+//     打断取消从取消发起起算，即 200ms 预算口径的指标）。
 type StepRecord struct {
 	Concurrency int     `json:"concurrency"`
 	LiveWorkers int     `json:"liveWorkers"`
 	DurationS   float64 `json:"durationS"`
-	Turns       int     `json:"turns"`  // client-side completed turns in window
-	Errors      int     `json:"errors"` // timeouts + connection failures in window
+	Turns       int     `json:"turns"`  // 窗口内客户端侧完成的轮数
+	Errors      int     `json:"errors"` // 窗口内的超时 + 连接失败
 
 	E2EFirstP50 float64 `json:"e2eFirstP50"`
 	E2EFirstP95 float64 `json:"e2eFirstP95"`
@@ -37,18 +36,18 @@ type StepRecord struct {
 	SrvKernelP99 float64 `json:"srvKernelP99"`
 	SrvBargeP99  float64 `json:"srvBargeP99"`
 
-	ServerTurnRate  float64 `json:"serverTurnRate"`  // completed turns/s
-	UplinkFPS       float64 `json:"uplinkFPS"`       // frames/s the harness actually sent
-	IngressDropRate float64 `json:"ingressDropRate"` // dropped / sent (0..1); -1 unknown
+	ServerTurnRate  float64 `json:"serverTurnRate"`  // 完成轮数/秒
+	UplinkFPS       float64 `json:"uplinkFPS"`       // harness 实际发出的帧/秒
+	IngressDropRate float64 `json:"ingressDropRate"` // 丢 / 发（0..1）；-1 未知
 	EgressDropPerS  float64 `json:"egressDropPerS"`
-	CPUUtil         float64 `json:"cpuUtil"` // busy/capacity (0..1); -1 unknown
+	CPUUtil         float64 `json:"cpuUtil"` // busy/capacity（0..1）；-1 未知
 	Goroutines      float64 `json:"goroutines"`
 	HeapMB          float64 `json:"heapMB"`
 	SessionsActive  float64 `json:"sessionsActive"`
 }
 
-// percentile returns the q-th (0..1) percentile of xs in milliseconds,
-// nearest-rank on a sorted copy; -1 when empty.
+// percentile 返回 xs 的第 q（0..1）分位数，单位毫秒，在排序副本上取最近秩；
+// 空时返回 -1。
 func percentile(xs []float64, q float64) float64 {
 	if len(xs) == 0 {
 		return -1
@@ -112,28 +111,24 @@ func buildRecord(n int, elapsed time.Duration, agg windowAgg, s0, s1 *snapshot, 
 	return rec
 }
 
-// Analysis is the harness's mechanical reading of the curve (10.4). It is a
-// first pass for the report; the design doc's final attribution is reviewed
-// by a human against the full data.
+// Analysis 是 harness 对曲线的机械解读（10.4）。它只是报告的第一遍；设计
+// 文档里的最终归因要由人对照完整数据复核。
 type Analysis struct {
-	KneeConcurrency int    `json:"kneeConcurrency"` // 0 = knee not reached
+	KneeConcurrency int    `json:"kneeConcurrency"` // 0 = 未达拐点
 	Wall            string `json:"wall"`            // cpu | drops | errors | scheduling | none
 	Reason          string `json:"reason"`
 }
 
-// Analyze finds the capacity knee: the first step whose server-side first
-// response p99 leaves the baseline band (>2x baseline +20ms), or that sheds
-// >1% of ingress frames, or that records errors — and whose degradation
-// *persists into the next step* (or is the final step). A single degraded
-// window with clean steps after it is a transient (GC pause, OS hiccup,
-// background process), not a capacity knee: capacity exhaustion does not
-// recover by adding more load. The wall is whichever limiting signal is
-// loudest at the knee step.
+// Analyze 寻找容量拐点：第一个满足「服务端首响 p99 离开基线带（> 2×基线
+// +20ms）、或入口丢帧 > 1%、或出现错误」、且其降级*延续到下一步*（或本身
+// 就是最后一步）的步。一个孤立的降级窗口后面跟着干净的步，是瞬态（GC 停顿、
+// OS 毛刺、后台进程），不是容量拐点：容量耗尽不会因加更多负载而恢复。墙是
+// 拐点那一步上最响亮的那个限制信号。
 func Analyze(recs []StepRecord) Analysis {
 	if len(recs) == 0 {
 		return Analysis{Wall: "none", Reason: "无数据"}
 	}
-	lat := func(r StepRecord) float64 { // prefer server view, fall back to client
+	lat := func(r StepRecord) float64 { // 优先服务端视角，回退到客户端
 		if r.SrvFirstP99 >= 0 {
 			return r.SrvFirstP99
 		}
@@ -150,7 +145,7 @@ func Analyze(recs []StepRecord) Analysis {
 			continue
 		}
 		if i+1 < len(recs) && !degraded(recs[i+1]) {
-			continue // transient: the next, heavier step is clean again
+			continue // 瞬态：下一个更重的步又干净了
 		}
 		a := Analysis{KneeConcurrency: r.Concurrency}
 		switch {
@@ -180,7 +175,7 @@ func max0(v float64) float64 {
 	return v
 }
 
-// Report is the run's full artifact set.
+// Report 是这次运行的完整工件集合。
 type Report struct {
 	Config     string       `json:"config"`
 	StartedAt  time.Time    `json:"startedAt"`
@@ -189,7 +184,7 @@ type Report struct {
 	Analysis   Analysis     `json:"analysis"`
 }
 
-// WriteFiles emits capacity.csv, capacity.json and capacity.html into dir.
+// WriteFiles 把 capacity.csv、capacity.json 和 capacity.html 写入 dir。
 func (r *Report) WriteFiles(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -211,7 +206,7 @@ func (r *Report) WriteFiles(dir string) error {
 	return os.WriteFile(filepath.Join(dir, "capacity.html"), []byte(html), 0o644)
 }
 
-// CSV renders the records as a flat table.
+// CSV 把记录渲染成一张扁平表。
 func (r *Report) CSV() string {
 	var b strings.Builder
 	b.WriteString("concurrency,turns,errors,e2e_first_p50_ms,e2e_first_p95_ms,e2e_first_p99_ms," +
@@ -230,7 +225,7 @@ func (r *Report) CSV() string {
 	return b.String()
 }
 
-// Table renders a human-readable summary for stdout.
+// Table 为 stdout 渲染一段人类可读的摘要。
 func (r *Report) Table() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%-6s %-6s %-5s %9s %9s %9s %9s %8s %7s %6s\n",

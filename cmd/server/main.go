@@ -1,6 +1,5 @@
-// Command server is the entrypoint for the voicestream real-time voice kernel.
-// It loads/validates configuration and runs the WebSocket transport (M2). The
-// ASR->LLM->TTS pipeline replaces the echo handler in M5.
+// Command server 是 voicestream 实时语音内核的入口。它加载/校验配置并运行
+// WebSocket 传输（M2）。ASR->LLM->TTS 流水线在 M5 取代了 echo handler。
 package main
 
 import (
@@ -17,7 +16,7 @@ import (
 	"voicestream/internal/session"
 	"voicestream/internal/transport"
 
-	// Self-registering adapters, selectable via config.
+	// 自注册的适配器，可通过配置选用。
 	_ "voicestream/internal/adapter/openaicompat"
 )
 
@@ -38,8 +37,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Assemble adapters now so a bad selection or missing API key fails at
-	// startup, not mid-conversation.
+	// 现在就装配适配器，让「错误的选择或缺失的 API key」在启动时失败，
+	// 而不是在对话中途。
 	set, err := adapter.Build(cfg)
 	if err != nil {
 		logger.Error("adapter assembly failed", "err", err)
@@ -58,13 +57,13 @@ func main() {
 
 	m := metrics.New()
 	mgr := session.NewManager(cfg, set, logger, m)
-	go mgr.Run(ctx) // idle reaper; reclaims all sessions on shutdown
+	go mgr.Run(ctx) // 空闲回收器；关停时回收所有会话
 
 	srv := transport.NewServerWithHandler(cfg.Server, logger, mgr.Handler())
-	srv.RegisterRoute("/metrics", m.Registry.Handler()) // Prometheus scrape
-	srv.RegisterRoute("/debug/turns", m.Hub)            // dashboard SSE feed
-	// pprof for the 11.2 hot-path iteration (single-tenant dev kernel; gate
-	// behind auth before any multi-tenant exposure).
+	srv.RegisterRoute("/metrics", m.Registry.Handler()) // Prometheus 抓取
+	srv.RegisterRoute("/debug/turns", m.Hub)            // 仪表盘 SSE 源
+	// pprof 供 11.2 的热路径迭代用（单租户开发内核；任何多租户暴露前需加
+	// 鉴权门禁）。
 	srv.RegisterRoute("/debug/pprof/", http.HandlerFunc(pprof.Index))
 	srv.RegisterRoute("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
 	srv.RegisterRoute("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))

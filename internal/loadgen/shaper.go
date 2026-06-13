@@ -5,25 +5,21 @@ import (
 	"time"
 )
 
-// Netem configures arrival-timing perturbation for uplink frames, the
-// portable equivalent of Linux `tc netem` for this harness (which must also
-// run on Windows). It models what the spec demands be modeled — and nothing
-// more: over WS/TCP, link impairments reach the application as *delayed,
-// bursty arrival*, never as reorder or loss. Accordingly the shaper only
-// moves departure times, and strictly preserves order (head-of-line
-// semantics: a delayed frame holds back every frame behind it, which is
-// exactly how a TCP retransmission stall surfaces).
+// Netem 配置上行帧的到达时序扰动，是本 harness（也得在 Windows 上跑）对
+// Linux `tc netem` 的跨平台等价物。它只建模规格要求建模的东西、绝不多做：
+// WS/TCP 之上，链路损伤到达应用层时表现为*被延迟、突发的到达*，绝非乱序或
+// 丢失。因此整形器只移动发出时刻，且严格保序（队头阻塞语义：一个被延迟的
+// 帧把它后面每一帧都顶住，这正是 TCP 重传停顿的表现形式）。
 //
-// On Linux the same effect can be injected below the socket instead:
+// 在 Linux 上同样的效果可以改在套接字之下注入：
 //
 //	tc qdisc add dev lo root netem delay 40ms 20ms loss 1%
 type Netem struct {
-	Delay  time.Duration // base extra delay per frame
-	Jitter time.Duration // extra uniform random delay in [0, Jitter)
-	// BurstEvery/BurstHold emulate periodic stalls (e.g. retransmission or
-	// wifi contention): within every BurstEvery window, frames ideally due in
-	// the first BurstHold are held to the end of that hold, then released
-	// together — the receiver sees a silence followed by a burst.
+	Delay  time.Duration // 每帧的基础额外延迟
+	Jitter time.Duration // [0, Jitter) 内均匀分布的额外随机延迟
+	// BurstEvery/BurstHold 模拟周期性停顿（如重传或 wifi 争用）：在每个
+	// BurstEvery 窗口内，本应在前 BurstHold 内发出的帧被顶到该 hold 末尾，
+	// 然后一起放出——接收侧看到的是「先静默后突发」。
 	BurstEvery time.Duration
 	BurstHold  time.Duration
 	Seed       uint64
@@ -33,12 +29,12 @@ func (n Netem) enabled() bool {
 	return n.Delay > 0 || n.Jitter > 0 || (n.BurstEvery > 0 && n.BurstHold > 0)
 }
 
-// shaper turns ideal departure times into perturbed, order-preserving release
-// times. It is not safe for concurrent use; each virtual session owns one.
+// shaper 把理想发出时刻变成扰动后的、保序的放行时刻。它不是并发安全的；
+// 每个虚拟会话各自拥有一个。
 type shaper struct {
 	n           Netem
 	rng         *rand.Rand
-	epoch       time.Time // burst windows are phased off the first frame
+	epoch       time.Time // 突发窗口以第一帧为相位起点
 	lastRelease time.Time
 }
 
@@ -46,9 +42,9 @@ func newShaper(n Netem) *shaper {
 	return &shaper{n: n, rng: rand.New(rand.NewPCG(n.Seed, n.Seed^0x9e3779b97f4a7c15))}
 }
 
-// release maps an ideal departure time to the shaped one. Monotonic by
-// construction: a spike on frame i delays every later frame until the
-// schedule catches up (burst delivery), mirroring TCP HOL blocking.
+// release 把一个理想发出时刻映射成整形后的时刻。单调是构造出来的：第 i 帧
+// 上的一个尖峰会延迟其后每一帧，直到时间表追上（突发交付），镜像 TCP 的
+// 队头阻塞。
 func (s *shaper) release(ideal time.Time) time.Time {
 	if s.epoch.IsZero() {
 		s.epoch = ideal
@@ -71,16 +67,14 @@ func (s *shaper) release(ideal time.Time) time.Time {
 	return t
 }
 
-// clock paces one session's uplink on a fixed ideal grid (one frame per
-// interval), optionally shaped by a Netem. Send slots never drift: if the
-// caller falls behind (or a burst hold releases late), subsequent frames go
-// out back-to-back until the grid is caught up — like a real socket flushing
-// a backlog.
+// clock 把一个会话的上行按固定理想网格定速（每 interval 一帧），可选地经
+// Netem 整形。发送时隙绝不漂移：若调用方落后了（或一次突发 hold 释放得晚），
+// 后续的帧会背靠背地发出，直到追上网格——就像真实套接字在冲刷积压。
 type clock struct {
 	interval  time.Duration
-	next      time.Time // ideal time of the next frame
-	lastIdeal time.Time // ideal time of the most recently sent frame
-	sh        *shaper   // nil when no perturbation
+	next      time.Time // 下一帧的理想时刻
+	lastIdeal time.Time // 最近发出那一帧的理想时刻
+	sh        *shaper   // 无扰动时为 nil
 }
 
 func newClock(interval time.Duration, n Netem) *clock {
@@ -91,13 +85,12 @@ func newClock(interval time.Duration, n Netem) *clock {
 	return c
 }
 
-// wait blocks until the next frame's (shaped) departure slot, then advances
-// the grid. Returns false if ctx ended first.
+// wait 阻塞到下一帧的（整形后）发出时隙，然后推进网格。若 ctx 先结束则返回
+// false。
 //
-// lastIdeal afterwards holds the slot's *ideal* time — when the simulated
-// user produced the frame, before any netem shaping or send backlog. Latency
-// measured from it therefore includes uplink perturbation and client-side
-// queueing, the way a real user would feel them.
+// 调用后 lastIdeal 持有该时隙的*理想*时刻——即模拟用户产出这一帧的时刻，
+// 在任何 netem 整形或发送积压之前。因此从它起算的延迟会包含上行扰动与
+// 客户端排队，正如真实用户会感受到的那样。
 func (c *clock) wait(ctx ctxDone) bool {
 	if c.next.IsZero() {
 		c.next = time.Now()
@@ -111,7 +104,7 @@ func (c *clock) wait(ctx ctxDone) bool {
 	return sleepUntil(ctx, at)
 }
 
-// peekIdeal returns the ideal time of the frame the next wait() will send.
+// peekIdeal 返回下一次 wait() 将发出那一帧的理想时刻。
 func (c *clock) peekIdeal() time.Time {
 	if c.next.IsZero() {
 		return time.Now()
@@ -119,8 +112,8 @@ func (c *clock) peekIdeal() time.Time {
 	return c.next
 }
 
-// ctxDone is the slice of context.Context the pacing helpers need; tests can
-// fake it without building real contexts.
+// ctxDone 是定速辅助函数所需的 context.Context 的最小切面；测试可以伪造它，
+// 不必构造真实的 context。
 type ctxDone interface{ Done() <-chan struct{} }
 
 func sleepUntil(ctx ctxDone, t time.Time) bool {

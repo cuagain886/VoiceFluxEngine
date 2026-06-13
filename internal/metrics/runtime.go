@@ -5,14 +5,13 @@ import (
 	rtmetrics "runtime/metrics"
 )
 
-// registerRuntimeGauges exposes the process resource signals the load
-// harness uses to attribute the capacity knee to a wall (CPU / memory /
-// scheduling). Everything is sampled at scrape time — never on a frame path.
+// registerRuntimeGauges 暴露负载 harness 用来把容量拐点归因到某面墙
+//（CPU / 内存 / 调度）的进程资源信号。一切都在抓取期采样——绝不在帧路径上。
 //
-// CPU comes from runtime/metrics: busy = total - idle, where total is
-// GOMAXPROCS x wall seconds (the process's CPU capacity). Utilization over a
-// window is delta(busy)/delta(capacity). These are runtime estimates, good
-// for trend analysis, not accounting.
+// CPU 取自 runtime/metrics：busy = total - idle，其中 total 是
+// GOMAXPROCS × 墙钟秒（进程的 CPU 容量）。一个窗口内的利用率 =
+// delta(busy)/delta(capacity)。这些是 runtime 的估计值，适合趋势分析，
+// 不是记账值。
 func registerRuntimeGauges(r *Registry) {
 	r.NewGaugeFunc("voicestream_goroutines", "Current goroutine count.",
 		func() float64 { return float64(runtime.NumGoroutine()) })

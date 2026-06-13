@@ -8,14 +8,12 @@ import (
 	"voicestream/internal/config"
 )
 
-// Factory builds an adapter from the full runtime config (each implementation
-// picks out the fields it needs).
+// Factory 从完整的运行时配置构建一个适配器（每个实现各自挑出它需要的字段）。
 type Factory[T any] func(cfg config.Config) (T, error)
 
-// The registries follow the database/sql driver pattern: implementations
-// register themselves by name (built-ins below, external ones from init() in
-// their own package via blank import), and Build assembles a Set from config
-// names — switching adapters is a config edit, never a core-code edit.
+// 这些注册表遵循 database/sql 驱动模式：实现按名字自注册（内建的在下方，
+// 外部的通过空白导入在各自包的 init() 里注册），Build 按配置里的名字装配出
+// 一个 Set——切换适配器是改配置，绝不是改核心代码。
 var (
 	regMu sync.Mutex
 	asrs  = map[string]Factory[ASR]{}
@@ -23,14 +21,14 @@ var (
 	ttss  = map[string]Factory[TTS]{}
 )
 
-// RegisterASR makes an ASR implementation selectable by name. It panics on a
-// duplicate name: that is a programmer error, caught at startup.
+// RegisterASR 让一个 ASR 实现可按名字选用。重名时 panic：那是编程错误，在
+// 启动时就被抓住。
 func RegisterASR(name string, f Factory[ASR]) { register(asrs, "ASR", name, f) }
 
-// RegisterLLM makes an LLM implementation selectable by name.
+// RegisterLLM 让一个 LLM 实现可按名字选用。
 func RegisterLLM(name string, f Factory[LLM]) { register(llms, "LLM", name, f) }
 
-// RegisterTTS makes a TTS implementation selectable by name.
+// RegisterTTS 让一个 TTS 实现可按名字选用。
 func RegisterTTS(name string, f Factory[TTS]) { register(ttss, "TTS", name, f) }
 
 func register[T any](reg map[string]Factory[T], kind, name string, f Factory[T]) {
@@ -42,15 +40,15 @@ func register[T any](reg map[string]Factory[T], kind, name string, f Factory[T])
 	reg[name] = f
 }
 
-// Set is the assembled trio of adapters the pipeline runs against.
+// Set 是流水线运行时所依赖的、装配好的三件套适配器。
 type Set struct {
 	ASR ASR
 	LLM LLM
 	TTS TTS
 }
 
-// Build assembles the adapter set named in cfg.Adapters. Unknown names fail
-// with the list of registered alternatives.
+// Build 按 cfg.Adapters 里的名字装配适配器集合。未知名字会带着「已注册的
+// 备选列表」失败。
 func Build(cfg config.Config) (Set, error) {
 	var (
 		s   Set
@@ -90,9 +88,8 @@ func names[T any](reg map[string]Factory[T]) []string {
 	return ns
 }
 
-// Built-in mocks, selected by adapters.{asr,llm,tts} = "mock". The optional
-// adapters.mock latencies shape turn timing for the load harness; they
-// default to zero (instant mocks).
+// 内建 mock，由 adapters.{asr,llm,tts} = "mock" 选用。可选的 adapters.mock
+// 时延用来为负载 harness 塑造轮的时序；它们默认为零（瞬时 mock）。
 func init() {
 	RegisterASR("mock", func(cfg config.Config) (ASR, error) {
 		return &MockASR{
