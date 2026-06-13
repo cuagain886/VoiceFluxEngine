@@ -7,18 +7,16 @@ import (
 	"github.com/coder/websocket"
 )
 
-// wsConn adapts a *websocket.Conn to the transport-agnostic Conn interface.
-// scratch is the write-side encode buffer: Conn's contract allows at most
-// one writer at a time, so reusing it across WriteFrame calls is safe and
-// keeps the steady-state downlink path allocation-free.
+// wsConn 把一个 *websocket.Conn 适配成与传输无关的 Conn 接口。scratch 是
+// 写侧的编码缓冲：Conn 的契约保证同一时刻至多一个写者，所以跨 WriteFrame
+// 调用复用它是安全的，并让稳态下行路径零分配。
 type wsConn struct {
 	c       *websocket.Conn
 	scratch []byte
 }
 
-// newWSConn wraps an accepted/dialed WebSocket connection. It raises the read
-// limit so a full MaxPayload frame fits in one message (the library default is
-// 32 KiB).
+// newWSConn 包装一个已 accept/dial 的 WebSocket 连接。它把读上限调高，使一个
+// 满 MaxPayload 的帧能装进一条消息（库默认上限是 32 KiB）。
 func newWSConn(c *websocket.Conn) *wsConn {
 	c.SetReadLimit(int64(HeaderSize + MaxPayload))
 	return &wsConn{c: c}
@@ -40,7 +38,7 @@ func (w *wsConn) WriteFrame(ctx context.Context, f Frame) error {
 	if err != nil {
 		return err
 	}
-	w.scratch = b // keep the grown buffer for the next frame
+	w.scratch = b // 留下已增长的缓冲给下一帧用
 	return w.c.Write(ctx, websocket.MessageBinary, b)
 }
 

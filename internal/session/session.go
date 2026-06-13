@@ -1,8 +1,7 @@
-// Package session manages the conversation lifecycle on top of the
-// transport (M7 wiring, M8 lifecycle): one Session per conversation — unique
-// id, monotonic epoch, idle-timeout reclamation — surviving across WebSocket
-// reconnects, with replay dedup on the uplink. Frames inside one connection
-// are TCP-ordered; there is deliberately no in-session reorder window (D13).
+// Package session 在传输之上管理对话生命周期（M7 接线、M8 生命周期）：
+// 一次对话一个 Session——唯一 id、单调 epoch、空闲超时回收——并在 WebSocket
+// 重连之间存活，上行带重放去重。一条连接内的帧由 TCP 保证有序；刻意不做
+// 会话内重排窗口（D13）。
 package session
 
 import (
@@ -22,32 +21,31 @@ import (
 	"voicestream/internal/vad"
 )
 
-// wireMsg is a downlink frame before the writer assigns its sequence number.
+// wireMsg 是一个下行帧——在写者给它分配序列号之前的样子。
 type wireMsg struct {
 	typ     transportpb.FrameType
 	tsUs    int64
 	payload []byte
 }
 
-// Session is one conversation. It owns the pipeline (and therefore the
-// conversation history), the VAD controller and the downlink queue; all of
-// it survives a disconnect. Connections come and go as attachments: at most
-// one at a time, each bound to the epoch it presented at handshake.
+// Session 是一次对话。它拥有流水线（因而也拥有对话历史）、VAD 控制器和下行
+// 队列；这一切都在断连后存活。连接以「附着（attachment）」的形式来来去去：
+// 同一时刻至多一个，各自绑定它在握手时出示的 epoch。
 type Session struct {
 	id  string
 	mgr *Manager
 
 	pipe      *pipeline.Pipeline
 	ctrl      *vad.Controller
-	runCancel context.CancelFunc // session-lifetime: pipeline + audio pump
+	runCancel context.CancelFunc // 会话生命周期：流水线 + 音频泵
 	runCtx    context.Context
 
-	wire chan wireMsg // session-lifetime downlink queue
+	wire chan wireMsg // 会话生命周期的下行队列
 
-	clockUs     atomic.Int64  // downlink sample clock, µs of audio queued
-	downlinkSeq atomic.Uint64 // continues across reconnects
-	uplinkFloor atomic.Uint64 // highest delivered uplink seq (dedup watermark)
-	lastActive  atomic.Int64  // unix nanos of the last frame in either direction
+	clockUs     atomic.Int64  // 下行采样时钟，已入队音频的微秒数
+	downlinkSeq atomic.Uint64 // 跨重连持续递增
+	uplinkFloor atomic.Uint64 // 已投递的最高上行 seq（去重水位）
+	lastActive  atomic.Int64  // 任一方向最后一帧的 unix 纳秒
 
 	dupFrames     atomic.Uint64
 	staleFrames   atomic.Uint64
@@ -59,15 +57,14 @@ type Session struct {
 	closed bool
 }
 
-// attachment binds one connection to the session at a specific epoch. A
-// takeover marks the previous attachment stale: anything still arriving on
-// it is counted and dropped, never delivered into the pipeline.
+// attachment 把一个连接在某个特定 epoch 上绑定到会话。一次接管会把上一个
+// 附着标记为 stale：任何仍从它到达的东西都被计数并丢弃，绝不投递进流水线。
 type attachment struct {
 	epoch  uint64
 	conn   transport.Conn
 	cancel context.CancelFunc
 	stale  atomic.Bool
-	done   chan struct{} // closed when reader and writer have both exited
+	done   chan struct{} // 读者与写者都退出后关闭
 
 	loops sync.WaitGroup
 }
@@ -115,9 +112,9 @@ func newSession(m *Manager, id string) (*Session, error) {
 	return s, nil
 }
 
-// attach binds conn to the session under claimedEpoch. The claim must be
-// strictly greater than the current epoch — equal or lower claims are stale
-// reconnects (e.g. a zombie client racing the live one) and are rejected.
+// attach 在 claimedEpoch 上把 conn 绑定到会话。该认领必须严格大于当前 epoch
+// ——相等或更低的认领是陈旧重连（例如一个僵尸客户端在和活跃客户端竞速），
+// 予以拒绝。
 func (s *Session) attach(conn transport.Conn, claimedEpoch uint64, ackDetail string) (*attachment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,7 +155,7 @@ func (s *Session) detach(att *attachment) {
 	s.mu.Unlock()
 }
 
-// close releases everything the session owns. Idempotent.
+// close 释放会话拥有的一切。幂等。
 func (s *Session) close() {
 	s.mu.Lock()
 	if s.closed {
@@ -169,7 +166,7 @@ func (s *Session) close() {
 	att := s.att
 	s.mu.Unlock()
 
-	s.runCancel() // stops pipeline, audio pump, and attachment loops (child ctx)
+	s.runCancel() // 停掉流水线、音频泵，以及附着的读写循环（子 ctx）
 	if att != nil {
 		_ = att.conn.Close(transport.StatusNormalClosure, "session closed")
 	}
@@ -179,9 +176,8 @@ func (s *Session) touch() { s.lastActive.Store(time.Now().UnixNano()) }
 
 func (s *Session) lastActiveTime() time.Time { return time.Unix(0, s.lastActive.Load()) }
 
-// advanceFloor claims seq against the dedup watermark. Replays after a
-// reconnect arrive in order below the floor and are rejected; the watermark
-// makes a reorder window unnecessary (TCP keeps each connection ordered).
+// advanceFloor 用 seq 与去重水位做比较并认领。重连后的重放会按序到达且低于
+// 水位，于是被拒绝；这条水位让重排窗口变得不必要（TCP 保证每条连接有序）。
 func (s *Session) advanceFloor(seq uint64) bool {
 	for {
 		cur := s.uplinkFloor.Load()
@@ -194,10 +190,10 @@ func (s *Session) advanceFloor(seq uint64) bool {
 	}
 }
 
-// readLoop is the per-attachment ingress edge: dedup + inline VAD + pipeline.
+// readLoop 是每附着的入口边缘：去重 + 内联 VAD + 流水线。
 func (s *Session) readLoop(ctx context.Context, att *attachment) {
 	defer att.loops.Done()
-	defer att.cancel() // reader death stops the writer too
+	defer att.cancel() // 读者死亡也把写者一并停掉
 	for {
 		f, err := att.conn.ReadFrame(ctx)
 		if err != nil {
@@ -221,7 +217,7 @@ func (s *Session) readLoop(ctx context.Context, att *attachment) {
 				continue
 			}
 			if c.Kind == transportpb.ControlKind_CONTROL_KIND_STOP {
-				// Client-initiated end of the whole conversation.
+				// 客户端主动结束整场对话。
 				s.mgr.reclaim(s, "client stop")
 				return
 			}
@@ -230,10 +226,9 @@ func (s *Session) readLoop(ctx context.Context, att *attachment) {
 	}
 }
 
-// writeLoop is the sole writer for this connection: the handshake ack first,
-// then downlink frames and heartbeat pings. A frame dequeued when the
-// connection dies is dropped, not re-queued — for real-time audio a write
-// failure means the moment has passed.
+// writeLoop 是这条连接的唯一写者：先发握手 ack，然后是下行帧与心跳 ping。
+// 一个在连接死亡时被取出的帧会被丢弃、不重新入队——对实时音频而言，一次
+// 写失败意味着那个时刻已经过去了。
 func (s *Session) writeLoop(ctx context.Context, att *attachment, ackDetail string) {
 	defer att.loops.Done()
 	defer att.cancel()
@@ -271,7 +266,7 @@ func (s *Session) writeLoop(ctx context.Context, att *attachment, ackDetail stri
 			err := att.conn.Ping(pctx)
 			pcancel()
 			if err != nil {
-				return // heartbeat timeout: the attachment is dead
+				return // 心跳超时：这个附着已经死了
 			}
 		case <-ctx.Done():
 			return
@@ -284,11 +279,9 @@ func (s *Session) writeFrame(ctx context.Context, att *attachment, typ transport
 	return att.conn.WriteFrame(ctx, f)
 }
 
-// audioPump moves synthesized audio from the egress ring onto the session
-// wire queue for the lifetime of the session, advancing the downlink clock.
-// Blocking on a full queue is safe: the egress ring upstream sheds
-// oldest-first, so memory stays bounded and the freshest audio wins. While
-// detached the queue simply fills and the conversation pauses.
+// audioPump 在会话的整个生命周期里，把合成音频从出口环搬到会话的 wire 队列
+// 上，并推进下行时钟。在队列满时阻塞是安全的：上游的出口环按「最旧优先」
+// 卸载，所以内存有界、最新音频胜出。脱离附着期间队列只是填满、对话暂停。
 func (s *Session) audioPump() {
 	rate := int64(s.mgr.cfg.Audio.SampleRate)
 	for {
@@ -307,8 +300,8 @@ func (s *Session) audioPump() {
 	}
 }
 
-// enqueueText queues a TEXT frame without ever blocking the stage goroutine
-// that produced it: subtitles shed (counted) under a slow client.
+// enqueueText 把一个 TEXT 帧入队，绝不阻塞产出它的阶段 goroutine：慢客户端
+// 下字幕会被卸载（并计数）。
 func (s *Session) enqueueText(text string, final bool, src transportpb.TextSource, tsUs int64) {
 	payload, err := proto.Marshal(&transportpb.TextPayload{Text: text, Final: final, Source: src})
 	if err != nil {

@@ -12,64 +12,58 @@ import (
 	"voicestream/internal/ringbuf"
 )
 
-// StageFunc is the unit the orchestrator composes: consume in, produce out,
-// honor ctx. adapter.ASR.Stream and adapter.TTS.Stream are StageFuncs by
-// shape; any conforming function can replace a stage without touching the
-// orchestrator.
+// StageFunc 是编排器组合的基本单元：消费 in、产出 out、尊重 ctx。
+// adapter.ASR.Stream 和 adapter.TTS.Stream 在「形状」上就是 StageFunc；任何
+// 符合此形状的函数都能替换某个阶段，而不必动编排器。
 type StageFunc[In, Out any] func(ctx context.Context, in <-chan In, out chan<- Out) error
 
-// Pipeline orchestrates one conversation: audio in at the ingress ring,
-// ASR -> LLM -> TTS across goroutines, audio out at the egress ring.
+// Pipeline 编排一次对话：音频从入口环进来，ASR -> LLM -> TTS 跨 goroutine
+// 流转，音频从出口环出去。
 //
-// Dual backpressure by data semantics (D3):
+// 按数据语义分流的双背压（D3）：
 //
-//	audio edges  ring buffer, drop-oldest, never blocks the producer
-//	text hops    bounded channels, a full channel blocks the upstream stage
+//	音频边缘  环形缓冲，drop-oldest，从不阻塞生产者
+//	文本跳点  有界 channel，channel 满则阻塞上游阶段
 //
-// The two meet at the ingress: when a turn stalls (slow model), finals queue
-// up, the ASR runner blocks handing one over, stops draining the ingress
-// ring, and the overload surfaces as counted frame drops — bounded memory
-// everywhere, by construction.
+// 两者在入口汇合：当一轮卡住（模型慢），finals 排起队，ASR runner 在交接时
+// 阻塞，停止抽干入口环，过载就表现为「被计数的丢帧」——处处内存有界，是
+// 构造出来的性质。
 //
-// Turn policy: finals are processed strictly one at a time, in order; a new
-// final never preempts a running turn. Preemption is exactly BargeIn(),
-// which M6's VAD fires on speech_start.
+// 轮策略：finals 严格逐个、按序处理；新的 final 绝不抢占正在跑的轮。抢占
+// 这件事专门由 BargeIn() 负责，它由 M6 的 VAD 在 speech_start 时触发。
 type Pipeline struct {
 	cfg    config.Config
 	set    adapter.Set
 	logger *slog.Logger
 
-	ingress *edge // transport -> ASR
-	egress  *edge // TTS -> transport
+	ingress *edge // 传输 -> ASR
+	egress  *edge // TTS -> 传输
 
-	endUtt  chan struct{} // utterance boundary, latched (cap 1)
-	bargeIn chan struct{} // response cancel request, latched (cap 1)
+	endUtt  chan struct{} // 语句边界，latched（cap 1）
+	bargeIn chan struct{} // 响应取消请求，latched（cap 1）
 
-	// OnTranscript and OnToken, when set before Run, observe ASR transcripts
-	// and LLM tokens (for downlink TEXT frames / subtitles). They run on
-	// stage goroutines: they must be fast and must not block.
+	// OnTranscript 和 OnToken 若在 Run 前设置，则观察 ASR 转写与 LLM token
+	//（用于下行 TEXT 帧 / 字幕）。它们跑在阶段 goroutine 上：必须快、不可阻塞。
 	OnTranscript func(adapter.Transcript)
 	OnToken      func(adapter.Token)
 
-	// OnTurnStart and OnTurnEnd, when set before Run, observe the response
-	// sub-chain lifecycle (M6's state machine listens here). They run on the
-	// orchestrator goroutine: fast, non-blocking.
+	// OnTurnStart 和 OnTurnEnd 若在 Run 前设置，则观察响应子链的生命周期
+	//（M6 的状态机在此监听）。它们跑在编排器 goroutine 上：快、不阻塞。
 	OnTurnStart func()
 	OnTurnEnd   func(cancelled bool)
 
-	// OnTurnStats, when set before Run, receives every published turn's
-	// measurements (M9 metrics export). Orchestrator goroutine; fast,
-	// non-blocking.
+	// OnTurnStats 若在 Run 前设置，则接收每个已发布轮的测量数据（M9 指标
+	// 导出）。编排器 goroutine；快、不阻塞。
 	OnTurnStats func(TurnStats)
 
-	history []adapter.Message // orchestrator-goroutine only
+	history []adapter.Message // 仅编排器 goroutine 访问
 
 	statsMu sync.Mutex
 	last    TurnStats
 	hasLast bool
 }
 
-// New builds a pipeline for one session from the validated config.
+// New 从校验过的配置为一次会话构建流水线。
 func New(cfg config.Config, set adapter.Set, logger *slog.Logger) (*Pipeline, error) {
 	inPol, err := ringbuf.ParsePolicy(cfg.RingBuf.IngressPolicy)
 	if err != nil {
@@ -101,20 +95,17 @@ func New(cfg config.Config, set adapter.Set, logger *slog.Logger) (*Pipeline, er
 	}, nil
 }
 
-// PushAudio offers an uplink frame to the ingress ring. It never blocks;
-// under drop-oldest it always succeeds (possibly evicting a stale frame).
-// Single producer: the transport read goroutine.
+// PushAudio 把一个上行帧投给入口环。它从不阻塞；drop-oldest 下永远成功
+//（可能驱逐一个过时帧）。单生产者：传输读 goroutine。
 func (p *Pipeline) PushAudio(f adapter.AudioFrame) bool { return p.ingress.push(f) }
 
-// AwaitDownlink blocks until a synthesized frame is available or ctx ends.
-// Single consumer: the transport write goroutine.
+// AwaitDownlink 阻塞直到有合成帧可用或 ctx 结束。单消费者：传输写 goroutine。
 func (p *Pipeline) AwaitDownlink(ctx context.Context) (adapter.AudioFrame, error) {
 	return p.egress.await(ctx)
 }
 
-// EndUtterance marks the end of the user's current utterance (speech_end).
-// M6's VAD calls this; until then the transport control plane or tests do.
-// Never blocks; repeated signals coalesce.
+// EndUtterance 标记用户当前语句结束（speech_end）。M6 的 VAD 调用它；在那
+// 之前由传输控制面或测试调用。从不阻塞；重复信号会合并。
 func (p *Pipeline) EndUtterance() {
 	select {
 	case p.endUtt <- struct{}{}:
@@ -122,8 +113,8 @@ func (p *Pipeline) EndUtterance() {
 	}
 }
 
-// BargeIn requests cancellation of the in-flight response sub-chain
-// (speech_start during RESPONDING). Never blocks; a no-op if idle.
+// BargeIn 请求取消正在进行的响应子链（RESPONDING 期间的 speech_start）。
+// 从不阻塞；空闲时是 no-op。
 func (p *Pipeline) BargeIn() {
 	select {
 	case p.bargeIn <- struct{}{}:
@@ -131,11 +122,11 @@ func (p *Pipeline) BargeIn() {
 	}
 }
 
-// IngressDropped and EgressDropped report frames shed at each audio edge.
+// IngressDropped 和 EgressDropped 报告各音频边缘卸载掉的帧数。
 func (p *Pipeline) IngressDropped() uint64 { return p.ingress.dropped() }
 func (p *Pipeline) EgressDropped() uint64  { return p.egress.dropped() }
 
-// LastTurn returns the most recently completed turn's measurements.
+// LastTurn 返回最近一个完成轮的测量数据。
 func (p *Pipeline) LastTurn() (TurnStats, bool) {
 	p.statsMu.Lock()
 	defer p.statsMu.Unlock()
@@ -159,7 +150,7 @@ func (p *Pipeline) publish(s TurnStats) {
 	)
 }
 
-// Run drives the conversation until ctx is cancelled or a stage fails.
+// Run 驱动对话，直到 ctx 被取消或某个阶段失败。
 func (p *Pipeline) Run(ctx context.Context) error {
 	finals := make(chan utterance, p.cfg.Pipeline.TranscriptChanCap)
 	asrErr := make(chan error, 1)
@@ -167,9 +158,8 @@ func (p *Pipeline) Run(ctx context.Context) error {
 
 	var cur *turnHandle
 	for {
-		// A new final is only accepted when no turn is running: finals
-		// queue in the channel, and once it is full the ASR runner blocks —
-		// the head of the backpressure chain back to the ingress ring.
+		// 只有在没有轮运行时才接受新的 final：finals 在 channel 里排队，
+		// 一旦排满，ASR runner 就阻塞——这是通往入口环的那条背压链的链头。
 		var finalsC <-chan utterance
 		var curDone <-chan struct{}
 		if cur == nil {
@@ -200,7 +190,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 
 		case u := <-finalsC:
 			if u.text == "" {
-				continue // empty utterance (e.g. spurious boundary): no turn
+				continue // 空语句（如虚假边界）：不开轮
 			}
 			cur = p.startTurn(ctx, u)
 
@@ -211,20 +201,18 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	}
 }
 
-// utterance is one finalized user input plus its timing anchors. finalAt is
-// captured when ASR produced the final — before any queueing — so time spent
-// waiting for the orchestrator counts as kernel overhead, not model latency.
+// utterance 是一条已定稿的用户输入加上它的计时锚点。finalAt 在 ASR 产出
+// final 时就采集——早于任何排队——于是「等编排器」的时间计入内核开销，
+// 而不是模型延迟。
 type utterance struct {
 	text    string
-	endAt   time.Time // when EndUtterance fired: t0 of first-response latency
-	finalAt time.Time // when the final transcript became available
+	endAt   time.Time // EndUtterance 触发的时刻：首响延迟的 t0
+	finalAt time.Time // 最终转写变得可用的时刻
 }
 
-// runASRLoop recognizes utterance after utterance: pump the ingress ring into
-// a fresh ASR stream, close it on the utterance boundary, hand the final
-// transcript to the orchestrator, repeat. It owns the consumer side of the
-// ingress ring, so when it blocks (orchestrator busy, finals full) the
-// ingress starts shedding — by design.
+// runASRLoop 一句接一句地识别：把入口环抽进一个全新的 ASR 流，在语句边界
+// 关闭它，把最终转写交给编排器，再循环。它拥有入口环的消费端，所以当它
+// 阻塞（编排器忙、finals 满）时，入口就开始卸载——这是设计使然。
 func (p *Pipeline) runASRLoop(ctx context.Context, finals chan<- utterance) error {
 	for ctx.Err() == nil {
 		in := make(chan adapter.AudioFrame, p.cfg.Pipeline.AudioChanCap)
@@ -237,8 +225,7 @@ func (p *Pipeline) runASRLoop(ctx context.Context, finals chan<- utterance) erro
 			streamErr <- err
 		}()
 
-		// Collect transcripts concurrently so partial emissions never block
-		// the recognizer while we are pumping audio.
+		// 并发收集转写，这样 partial 的产出在我们抽音频时永不阻塞识别器。
 		var final adapter.Transcript
 		collected := make(chan struct{})
 		go func() {
@@ -253,7 +240,7 @@ func (p *Pipeline) runASRLoop(ctx context.Context, finals chan<- utterance) erro
 			}
 		}()
 
-		// Pump frames until the utterance boundary.
+		// 抽帧直到语句边界。
 		var endAt time.Time
 	pump:
 		for {
@@ -274,8 +261,8 @@ func (p *Pipeline) runASRLoop(ctx context.Context, finals chan<- utterance) erro
 			select {
 			case in <- f:
 			case <-p.endUtt:
-				// Boundary arrived while handing over a frame; the frame is
-				// hangover-region audio and is deliberately dropped.
+				// 边界在交接某帧时到达；这一帧属于 hangover 区音频，
+				// 刻意丢弃。
 				endAt = time.Now()
 				break pump
 			case <-ctx.Done():
@@ -293,8 +280,8 @@ func (p *Pipeline) runASRLoop(ctx context.Context, finals chan<- utterance) erro
 			return fmt.Errorf("pipeline: ASR stream: %w", err)
 		}
 
-		// Hand the final over. Blocking here when the queue is full is the
-		// designed stall: ingress keeps absorbing via drop-oldest.
+		// 把 final 交出去。队列满时在此阻塞正是设计中的停顿：入口靠
+		// drop-oldest 继续吸收。
 		select {
 		case finals <- utterance{text: final.Text, endAt: endAt, finalAt: time.Now()}:
 		case <-ctx.Done():

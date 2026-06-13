@@ -8,33 +8,32 @@ import (
 	"voicestream/internal/transport/transportpb"
 )
 
-// Wire constants for the fixed binary frame header.
+// 固定二进制帧头的线路常量。
 //
-// Layout (big-endian / network byte order), 24 bytes total:
+// 布局（大端 / 网络字节序），共 24 字节：
 //
-//	offset size field   type        meaning
-//	0      2    magic   0x56 0x53   sync / sanity ("VS")
-//	2      1    version uint8       protocol version
-//	3      1    type    uint8       FrameType (AUDIO/TEXT/CONTROL)
-//	4      8    seq     uint64      monotonic sequence number
-//	12     8    ts_us   int64       sample-clock PTS, microseconds
-//	20     4    length  uint32      payload length in bytes
-//	24     ...  payload bytes       AUDIO=raw PCM; TEXT/CONTROL=protobuf
+//	偏移 大小 字段    类型        含义
+//	0    2    magic   0x56 0x53   同步 / 合法性校验（"VS"）
+//	2    1    version uint8       协议版本
+//	3    1    type    uint8       FrameType（AUDIO/TEXT/CONTROL）
+//	4    8    seq     uint64      单调递增的序列号
+//	12   8    ts_us   int64       采样时钟 PTS，微秒
+//	20   4    length  uint32      负载字节数
+//	24   ...  payload bytes       AUDIO=裸 PCM；TEXT/CONTROL=protobuf
 //
-// The header is hand-rolled (not protobuf) so it is cheap to parse with zero
-// allocation and works over any transport, including byte-stream transports
-// (raw TCP / WebTransport) that provide no message framing of their own.
+// 帧头是手写的（不用 protobuf），所以解析便宜、零分配，且能跑在任何传输上
+// ——包括自身不提供消息分帧的字节流传输（裸 TCP / WebTransport）。
 const (
 	Magic0     = 0x56 // 'V'
 	Magic1     = 0x53 // 'S'
 	Version    = 1
 	HeaderSize = 24
-	// MaxPayload bounds a single frame's payload to guard against malicious or
-	// corrupt length fields. 64 KiB comfortably exceeds a 20ms PCM frame.
+	// MaxPayload 限定单帧负载，防御恶意或损坏的 length 字段。64 KiB 远超一个
+	// 20ms 的 PCM 帧。
 	MaxPayload = 64 * 1024
 )
 
-// Frame errors. Callers can match these with errors.Is.
+// 帧相关错误。调用方可用 errors.Is 匹配。
 var (
 	ErrShortHeader     = errors.New("transport: buffer shorter than frame header")
 	ErrBadMagic        = errors.New("transport: bad frame magic")
@@ -43,9 +42,8 @@ var (
 	ErrFrameLength     = errors.New("transport: declared length does not match payload")
 )
 
-// Frame is a decoded protocol frame: the fixed header fields plus the payload.
-// For AUDIO frames Payload is raw PCM; for TEXT/CONTROL it is a marshaled
-// protobuf message (see transportpb).
+// Frame 是一个解码后的协议帧：固定头字段 + 负载。AUDIO 帧的 Payload 是裸
+// PCM；TEXT/CONTROL 的是序列化后的 protobuf 消息（见 transportpb）。
 type Frame struct {
 	Type    transportpb.FrameType
 	Seq     uint64
@@ -53,11 +51,10 @@ type Frame struct {
 	Payload []byte
 }
 
-// EncodedLen returns the number of bytes Frame.MarshalBinary will produce.
+// EncodedLen 返回 Frame.MarshalBinary 将产出的字节数。
 func (f Frame) EncodedLen() int { return HeaderSize + len(f.Payload) }
 
-// MarshalBinary encodes the frame into a freshly allocated byte slice.
-// It implements encoding.BinaryMarshaler.
+// MarshalBinary 把帧编码进一块新分配的字节切片。它实现 encoding.BinaryMarshaler。
 func (f Frame) MarshalBinary() ([]byte, error) {
 	buf, err := f.AppendBinary(make([]byte, 0, f.EncodedLen()))
 	if err != nil {
@@ -66,10 +63,9 @@ func (f Frame) MarshalBinary() ([]byte, error) {
 	return buf, nil
 }
 
-// AppendBinary appends the encoded frame to buf and returns the extended
-// slice (encoding.BinaryAppender). The transport write path keeps one
-// scratch buffer per connection and re-encodes into it, so steady-state
-// downlink marshaling allocates nothing (11.2 zero-alloc gate).
+// AppendBinary 把编码后的帧追加到 buf 并返回扩展后的切片
+//（encoding.BinaryAppender）。传输写路径为每个连接保留一块 scratch 缓冲并
+// 重复编码进去，于是稳态下行编码零分配（11.2 的零分配门禁）。
 func (f Frame) AppendBinary(buf []byte) ([]byte, error) {
 	if len(f.Payload) > MaxPayload {
 		return nil, fmt.Errorf("%w: %d > %d", ErrPayloadTooLarge, len(f.Payload), MaxPayload)
@@ -90,9 +86,9 @@ func (f Frame) encodeHeader(buf []byte) {
 	binary.BigEndian.PutUint32(buf[20:24], uint32(len(f.Payload)))
 }
 
-// Decode parses a complete frame (header + payload) from buf, which over a
-// WebSocket transport is exactly one binary message. The returned Frame's
-// Payload aliases buf; copy it if you need to retain it past buf's lifetime.
+// Decode 从 buf 解析出一个完整帧（头 + 负载）；在 WebSocket 传输上 buf 恰好
+// 是一条二进制消息。返回的 Frame 的 Payload 是 buf 的别名（共享底层数组）；
+// 若需在 buf 生命周期之外保留它，请自行拷贝。
 func Decode(buf []byte) (Frame, error) {
 	if len(buf) < HeaderSize {
 		return Frame{}, ErrShortHeader

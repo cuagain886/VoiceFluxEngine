@@ -12,13 +12,12 @@ import (
 	"github.com/coder/websocket"
 )
 
-// Handler processes a single accepted connection. M2 ships an echo handler;
-// M5 replaces it with the real ASR->LLM->TTS pipeline. It returns when the
-// connection ends (the returned error is informational, e.g. io.EOF on a clean
-// client close).
+// Handler 处理单个已 accept 的连接。M2 交付一个 echo handler；M5 把它换成
+// 真正的 ASR->LLM->TTS 流水线。连接结束时返回（返回的 error 是信息性的，
+// 例如客户端干净关闭时的 io.EOF）。
 type Handler func(ctx context.Context, conn Conn) error
 
-// Server terminates WebSocket connections and runs a Handler per connection.
+// Server 终结 WebSocket 连接，并为每个连接跑一个 Handler。
 type Server struct {
 	cfg     config.ServerConfig
 	log     *slog.Logger
@@ -26,28 +25,28 @@ type Server struct {
 	routes  map[string]http.Handler
 }
 
-// NewServer returns a Server wired with the echo handler (the M2 default).
+// NewServer 返回一个接好 echo handler 的 Server（M2 默认）。
 func NewServer(cfg config.ServerConfig, log *slog.Logger) *Server {
 	return NewServerWithHandler(cfg, log, EchoHandler(cfg.HeartbeatPeriod, log))
 }
 
-// NewServerWithHandler returns a Server running the given per-connection
-// handler (M7+: the voice session handler).
+// NewServerWithHandler 返回一个跑给定「每连接 handler」的 Server
+//（M7+：语音会话 handler）。
 func NewServerWithHandler(cfg config.ServerConfig, log *slog.Logger, h Handler) *Server {
 	return &Server{cfg: cfg, log: log, handler: h, routes: map[string]http.Handler{}}
 }
 
-// RegisterRoute mounts an extra HTTP handler (metrics, dashboards) on the
-// server's mux. Must be called before Run / HTTPHandler.
+// RegisterRoute 在服务器的 mux 上挂一个额外的 HTTP handler（指标、仪表盘）。
+// 必须在 Run / HTTPHandler 之前调用。
 func (s *Server) RegisterRoute(pattern string, h http.Handler) {
 	s.routes[pattern] = h
 }
 
-// Run starts the HTTP/WebSocket server and blocks until ctx is cancelled.
+// Run 启动 HTTP/WebSocket 服务器并阻塞，直到 ctx 被取消。
 //
-// Note on low-latency tuning: Go's net package enables TCP_NODELAY on all TCP
-// connections by default, so accepted connections already disable Nagle — no
-// action needed here beyond disabling WebSocket compression (see handleWS).
+// 关于低延迟调优：Go 的 net 包默认对所有 TCP 连接开启 TCP_NODELAY，所以
+// accept 进来的连接已经禁用了 Nagle——除了关闭 WebSocket 压缩（见 handleWS）
+// 之外，这里无需额外动作。
 func (s *Server) Run(ctx context.Context) error {
 	httpServer := &http.Server{Addr: s.cfg.Addr, Handler: s.HTTPHandler()}
 
@@ -65,8 +64,8 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-// HTTPHandler returns the server's routing (WS endpoint + optional static
-// demo client), usable directly with httptest in integration tests.
+// HTTPHandler 返回服务器的路由（WS 端点 + 可选的静态演示客户端），可在集成
+// 测试里直接配合 httptest 使用。
 func (s *Server) HTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
@@ -74,7 +73,7 @@ func (s *Server) HTTPHandler() http.Handler {
 		mux.Handle(pattern, h)
 	}
 	if dir := s.cfg.StaticDir; dir != "" {
-		// Serve the demo client (web/). The /ws upgrade path keeps priority.
+		// 提供演示客户端（web/）。/ws 升级路径优先级更高。
 		mux.Handle("/", http.FileServer(http.Dir(dir)))
 	}
 	return mux
@@ -82,8 +81,8 @@ func (s *Server) HTTPHandler() http.Handler {
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// Disable permessage-deflate: compression adds latency/CPU on small
-		// real-time frames (design D13).
+		// 禁用 permessage-deflate：在小的实时帧上压缩只会增加延迟/CPU
+		//（设计 D13）。
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
@@ -98,10 +97,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	_ = conn.Close(StatusNormalClosure, "bye")
 }
 
-// EchoHandler returns a Handler that echoes every received frame back to the
-// sender. It uses the per-connection read/write goroutine model: one goroutine
-// reads, one goroutine is the sole writer (frames + heartbeat pings), which
-// satisfies the transport's single-writer constraint.
+// EchoHandler 返回一个把收到的每个帧原样回送给发送方的 Handler。它采用
+// 每连接「一读一写」goroutine 模型：一个 goroutine 读，一个 goroutine 是
+// 唯一的写者（帧 + 心跳 ping），从而满足传输的单写者约束。
 func EchoHandler(heartbeat time.Duration, log *slog.Logger) Handler {
 	if heartbeat <= 0 {
 		heartbeat = 10 * time.Second
@@ -113,8 +111,8 @@ func EchoHandler(heartbeat time.Duration, log *slog.Logger) Handler {
 		egress := make(chan Frame, 16)
 		errc := make(chan error, 2)
 
-		// Read goroutine: decode frames and forward to the writer. In M2 the
-		// "pipeline" is a direct forward (echo); M5 replaces it.
+		// 读 goroutine：解码帧并转发给写者。M2 里「流水线」就是直接转发
+		//（echo）；M5 会替换它。
 		go func() {
 			for {
 				f, err := conn.ReadFrame(ctx)
@@ -131,7 +129,7 @@ func EchoHandler(heartbeat time.Duration, log *slog.Logger) Handler {
 			}
 		}()
 
-		// Write goroutine: sole writer — frames and heartbeat pings.
+		// 写 goroutine：唯一的写者——帧与心跳 ping。
 		go func() {
 			t := time.NewTicker(heartbeat)
 			defer t.Stop()
@@ -147,7 +145,7 @@ func EchoHandler(heartbeat time.Duration, log *slog.Logger) Handler {
 					err := conn.Ping(pctx)
 					pcancel()
 					if err != nil {
-						errc <- err // heartbeat timeout => treat as disconnect
+						errc <- err // 心跳超时 => 当作断连处理
 						return
 					}
 				case <-ctx.Done():

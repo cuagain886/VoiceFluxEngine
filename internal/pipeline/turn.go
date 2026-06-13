@@ -10,33 +10,31 @@ import (
 	"voicestream/internal/adapter"
 )
 
-// maxHistory bounds the conversation memory passed to the LLM.
+// maxHistory 限定传给 LLM 的对话记忆长度。
 const maxHistory = 16
 
-// TurnStats is the per-turn latency decomposition (task 5.6). Boundary
-// timestamps are captured at stage handoffs so the total splits into "time
-// inside model calls" vs "time inside the kernel's plumbing".
+// TurnStats 是每轮的延迟分解（任务 5.6）。边界时间戳在各阶段交接处采集，
+// 于是总延迟可拆成「待在模型调用里的时间」vs「待在内核管道里的时间」两本账。
 type TurnStats struct {
 	Prompt string
 	Reply  string
 
-	UtteranceEndAt  time.Time // t0: user stopped speaking
-	ASRFinalAt      time.Time // final transcript available
-	LLMStartAt      time.Time // LLM stream opened
-	LLMFirstTokenAt time.Time // first token out of the LLM
-	LLMLastTokenAt  time.Time // last token out of the LLM (full-span end)
-	TTSStartAt      time.Time // first token handed to TTS
-	TTSFirstFrameAt time.Time // first synthesized frame in the egress ring
-	TTSLastFrameAt  time.Time // last synthesized frame (full-span end)
+	UtteranceEndAt  time.Time // t0：用户停止说话
+	ASRFinalAt      time.Time // 最终转写可用
+	LLMStartAt      time.Time // LLM 流打开
+	LLMFirstTokenAt time.Time // LLM 吐出第一个 token
+	LLMLastTokenAt  time.Time // LLM 吐出最后一个 token（完整跨度的右端）
+	TTSStartAt      time.Time // 第一个 token 递给 TTS
+	TTSFirstFrameAt time.Time // 第一帧合成音频进入出口环
+	TTSLastFrameAt  time.Time // 最后一帧合成音频（完整跨度的右端）
 	EndedAt         time.Time
 
 	Cancelled      bool
-	FlushedFrames  int           // egress frames drained by a barge-in flush
-	BargeInLatency time.Duration // cancel requested -> sub-chain down + flushed
+	FlushedFrames  int           // 被打断 flush 排空的出口帧数
+	BargeInLatency time.Duration // 取消发起 -> 子链停止 + 排空完成
 }
 
-// FirstResponse is the user-perceived latency: speech end to first downlink
-// audio frame being available to the transport.
+// FirstResponse 是用户感知到的延迟：从说完话到第一帧下行音频可被传输取走。
 func (s TurnStats) FirstResponse() time.Duration {
 	if s.TTSFirstFrameAt.IsZero() {
 		return 0
@@ -44,8 +42,7 @@ func (s TurnStats) FirstResponse() time.Duration {
 	return s.TTSFirstFrameAt.Sub(s.UtteranceEndAt)
 }
 
-// ModelLatency sums the time spent waiting on the models themselves: ASR
-// finalization, LLM first token, TTS first frame.
+// ModelLatency 累加「等模型自己」的时间：ASR 定稿、LLM 首 token、TTS 首帧。
 func (s TurnStats) ModelLatency() time.Duration {
 	if s.TTSFirstFrameAt.IsZero() {
 		return 0
@@ -55,9 +52,8 @@ func (s TurnStats) ModelLatency() time.Duration {
 		s.TTSFirstFrameAt.Sub(s.TTSStartAt)
 }
 
-// KernelOverhead is what this project is accountable for: first-response
-// latency minus the model-inherent spans — queueing and handoff costs in the
-// transport/orchestration layer.
+// KernelOverhead 是本项目该负责的那本账：首响延迟减去模型固有跨度——也就是
+// 传输/编排层里的排队与交接开销。
 func (s TurnStats) KernelOverhead() time.Duration {
 	if s.TTSFirstFrameAt.IsZero() {
 		return 0
@@ -65,25 +61,23 @@ func (s TurnStats) KernelOverhead() time.Duration {
 	return s.FirstResponse() - s.ModelLatency()
 }
 
-// turnHandle owns one LLM->TTS response sub-chain. Its goroutines share the
-// turn context; cancelling it is the barge-in mechanism. Stats fields are
-// written by the sub-chain goroutines and read only after done closes
-// (wg.Wait provides the happens-before edge).
+// turnHandle 拥有一条 LLM->TTS 响应子链。它的几个 goroutine 共享轮 context；
+// 取消这个 context 就是打断机制。stats 字段由子链 goroutine 写入，只在 done
+// 关闭之后才被读取（wg.Wait 提供了 happens-before 屏障）。
 type turnHandle struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	stats  TurnStats
-	err    error // first non-cancellation stage error
+	err    error // 第一个非取消类的阶段错误
 }
 
-// startTurn launches the response sub-chain for one finalized utterance:
+// startTurn 为一条已定稿的语句启动响应子链：
 //
-//	LLM ──tokens──▶ forwarder ──ttsIn──▶ TTS ──ttsOut──▶ egress pump ─▶ ring
+//	LLM ──tokens──▶ 转发器 ──ttsIn──▶ TTS ──ttsOut──▶ 出口泵 ─▶ 环
 //
-// Four goroutines, all under the turn context. The forwarder tees tokens to
-// the OnToken observer and the reply accumulator; its blocking send into
-// ttsIn is the LLM-side backpressure. The pump's ring push never blocks —
-// egress is real-time and sheds instead.
+// 四个 goroutine，全在轮 context 之下。转发器把 token 同时分流给 OnToken
+// 观察者和回复累加器；它向 ttsIn 的阻塞发送就是 LLM 侧的背压。泵向环的
+// push 从不阻塞——出口是实时的，宁可卸载也不阻塞。
 func (p *Pipeline) startTurn(ctx context.Context, u utterance) *turnHandle {
 	tctx, cancel := context.WithCancel(ctx)
 	h := &turnHandle{cancel: cancel, done: make(chan struct{})}
@@ -108,10 +102,10 @@ func (p *Pipeline) startTurn(ctx context.Context, u utterance) *turnHandle {
 			h.err = err
 		}
 		errMu.Unlock()
-		cancel() // a dead stage takes the whole sub-chain down
+		cancel() // 一个阶段死了就把整条子链拖下去
 	}
 
-	// LLM stage.
+	// LLM 阶段。
 	wg.Add(1)
 	h.stats.LLMStartAt = time.Now()
 	go func() {
@@ -120,7 +114,7 @@ func (p *Pipeline) startTurn(ctx context.Context, u utterance) *turnHandle {
 		close(tokens)
 	}()
 
-	// Token forwarder: observe, accumulate the reply, feed TTS.
+	// Token 转发器：观察、累加回复、喂给 TTS。
 	wg.Add(1)
 	var reply strings.Builder
 	go func() {
@@ -147,7 +141,7 @@ func (p *Pipeline) startTurn(ctx context.Context, u utterance) *turnHandle {
 		}
 	}()
 
-	// TTS stage.
+	// TTS 阶段。
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -155,7 +149,7 @@ func (p *Pipeline) startTurn(ctx context.Context, u utterance) *turnHandle {
 		close(ttsOut)
 	}()
 
-	// Egress pump: the only writer into the egress ring during this turn.
+	// 出口泵：本轮期间唯一向出口环写入的 goroutine。
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -181,8 +175,7 @@ func (p *Pipeline) startTurn(ctx context.Context, u utterance) *turnHandle {
 	return h
 }
 
-// finishTurn records a naturally completed turn and appends it to the
-// conversation history.
+// finishTurn 记录一个自然完成的轮，并把它追加进对话历史。
 func (p *Pipeline) finishTurn(h *turnHandle) {
 	<-h.done
 	if h.err != nil {
@@ -195,10 +188,9 @@ func (p *Pipeline) finishTurn(h *turnHandle) {
 	}
 }
 
-// cancelTurn is the barge-in path (task 5.4): cancel the sub-chain, wait for
-// every stage to exit (the adapters' cancel contract makes this prompt), then
-// flush the in-flight downlink audio so the egress holds nothing stale. The
-// ASR loop is untouched — it keeps listening throughout.
+// cancelTurn 是打断路径（任务 5.4）：取消子链、等每个阶段退出（适配器的取消
+// 契约让这件事很快）、再清空在途下行音频，使出口不残留任何过时数据。ASR
+// 循环完全不受影响——它全程继续监听。
 func (p *Pipeline) cancelTurn(h *turnHandle) {
 	begin := time.Now()
 	h.cancel()
@@ -206,8 +198,8 @@ func (p *Pipeline) cancelTurn(h *turnHandle) {
 	h.stats.Cancelled = true
 	h.stats.FlushedFrames = p.egress.drain()
 	h.stats.BargeInLatency = time.Since(begin)
-	// What the agent managed to say still happened; keep it in history so
-	// the next turn's context reflects reality.
+	// Agent 已经说出口的那部分确实发生了；留在历史里，让下一轮的上下文反映
+	// 真实情况。
 	p.appendHistory(h.stats.Prompt, h.stats.Reply)
 	p.publish(h.stats)
 	if p.OnTurnEnd != nil {

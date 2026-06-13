@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// State is the session conversation state.
+// State 是会话的对话状态。
 type State uint8
 
 const (
@@ -15,7 +15,7 @@ const (
 	RespondingAgent
 )
 
-// String implements fmt.Stringer.
+// String 实现 fmt.Stringer。
 func (s State) String() string {
 	switch s {
 	case Listening:
@@ -31,68 +31,65 @@ func (s State) String() string {
 	}
 }
 
-// Action is what a transition asks the pipeline to do.
+// Action 是一次迁移要求流水线执行的动作。
 type Action uint8
 
 const (
 	ActNone Action = iota
-	// ActEndUtterance commits the user's utterance to the ASR -> turn path.
+	// ActEndUtterance 把用户这句话提交到 ASR -> 轮 的通路。
 	ActEndUtterance
-	// ActCancelTurn cancels the in-flight (or stale just-started) response
-	// sub-chain and flushes in-flight downlink audio: barge-in.
+	// ActCancelTurn 取消正在进行的（或刚启动就过时的）响应子链，并清空在途
+	// 下行音频：这就是打断（barge-in）。
 	ActCancelTurn
 )
 
-// Machine is the explicit conversation state machine. Events arrive from two
-// goroutines — speech events from the ingress reader (inline VAD), response
-// lifecycle from the orchestrator — so Apply is mutex-guarded; at one call
-// per audio frame plus a few per turn, contention is irrelevant.
+// Machine 是显式的对话状态机。事件来自两个 goroutine——语音事件来自入口读
+// goroutine（内联 VAD），响应生命周期来自编排器——所以 Apply 用互斥量守护；
+// 频率不过是「每音频帧一次 + 每轮几次」，锁竞争可忽略。
 //
-// Transition table (— = rejected as illegal, state unchanged):
+// 迁移表（— = 作为非法迁移拒绝，状态不变）：
 //
-//	state \ event     SpeechStart            SpeechEnd        ResponseStarted       ResponseDone
+//	状态 \ 事件        SpeechStart            SpeechEnd        ResponseStarted       ResponseDone
 //	LISTENING         →SPEAKING_USER         —                →RESPONDING           no-op
-//	SPEAKING_USER     —                      →THINKING (end)  stay (cancel: stale)  no-op
-//	THINKING          →SPEAKING_USER (cancel) —               →RESPONDING           →LISTENING
-//	RESPONDING        →SPEAKING_USER (cancel) —               —                     →LISTENING
+//	SPEAKING_USER     —                      →THINKING (结束) 留在原地(取消:过时)  no-op
+//	THINKING          →SPEAKING_USER (取消)  —                →RESPONDING           →LISTENING
+//	RESPONDING        →SPEAKING_USER (取消)  —                —                     →LISTENING
 //
-// Notes on the deliberate cells:
-//   - RESPONDING + SpeechStart is THE barge-in: cancel and listen to the user.
-//   - THINKING + SpeechStart: the user resumed before the answer started;
-//     cancel whatever is pending so a stale reply doesn't talk over them.
-//   - SPEAKING_USER + ResponseStarted: a queued turn for an *old* utterance
-//     fired while the user is already talking — by definition stale, cancel
-//     it immediately rather than letting the agent interrupt the user.
-//   - ResponseDone in LISTENING/SPEAKING_USER is a no-op, not an error: after
-//     a barge-in cancel, the turn's done event arrives once the machine has
-//     already moved on.
+// 几个「刻意设计」的格子说明：
+//   - RESPONDING + SpeechStart 就是打断本体：取消，转去听用户。
+//   - THINKING + SpeechStart：答案还没开口用户就又说话了；取消一切待发的
+//     东西，免得一个过时的回复盖着用户说话。
+//   - SPEAKING_USER + ResponseStarted：一个排队中、属于*旧*语句的轮在用户
+//     已经在说话时触发了——按定义就是过时的，立即取消，而不是让 Agent 打断
+//     用户。
+//   - LISTENING/SPEAKING_USER 下的 ResponseDone 是 no-op 而非错误：打断取消
+//     之后，轮的 done 事件会在状态机已经往前走了之后才到达。
 type Machine struct {
-	mu       sync.Mutex
-	state    State
-	illegal  uint64
-	OnIllegal func(state State, ev Event) // optional observer; called outside hot decisions, must not block
+	mu        sync.Mutex
+	state     State
+	illegal   uint64
+	OnIllegal func(state State, ev Event) // 可选观察者；在热决策之外调用，不可阻塞
 }
 
-// NewMachine starts in LISTENING.
+// NewMachine 从 LISTENING 起步。
 func NewMachine() *Machine { return &Machine{state: Listening} }
 
-// State returns the current state.
+// State 返回当前状态。
 func (m *Machine) State() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.state
 }
 
-// Illegal returns how many events were rejected as undefined transitions.
+// Illegal 返回有多少事件作为「未定义迁移」被拒绝。
 func (m *Machine) Illegal() uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.illegal
 }
 
-// Apply runs one event through the table, returning the action the caller
-// must execute. Undefined transitions leave the state unchanged, count as
-// illegal, and return an error.
+// Apply 让一个事件走一遍迁移表，返回调用方必须执行的动作。未定义的迁移让
+// 状态保持不变、计为非法、并返回错误。
 func (m *Machine) Apply(ev Event) (Action, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -140,7 +137,7 @@ func (m *Machine) Apply(ev Event) (Action, error) {
 	case RespondingAgent:
 		switch ev {
 		case SpeechStart:
-			c = cell{SpeakingUser, ActCancelTurn} // barge-in
+			c = cell{SpeakingUser, ActCancelTurn} // 打断
 		case ResponseDone:
 			c = cell{Listening, ActNone}
 		default:

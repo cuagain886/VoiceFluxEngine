@@ -2,9 +2,8 @@ package transport
 
 import "context"
 
-// StatusCode is a transport-agnostic close code. The values mirror RFC 6455
-// WebSocket close codes; a future WebTransport implementation maps them onto
-// its own close semantics.
+// StatusCode 是与具体传输无关的关闭码。取值镜像 RFC 6455 的 WebSocket 关闭
+// 码；将来的 WebTransport 实现把它们映射到自己的关闭语义上。
 type StatusCode uint16
 
 const (
@@ -15,21 +14,19 @@ const (
 	StatusInternalError StatusCode = 1011
 )
 
-// Conn is the transport-agnostic connection seen by the pipeline and session
-// layers. They depend only on this interface, never on a concrete transport, so
-// swapping WebSocket for WebTransport later is a drop-in (design D12).
+// Conn 是流水线层与会话层看到的、与具体传输无关的连接抽象。它们只依赖这个
+// 接口、绝不依赖某个具体传输，所以将来把 WebSocket 换成 WebTransport 是一次
+// drop-in 替换（设计 D12）。
 //
-// Read and Write may each be driven by one goroutine concurrently, but there
-// must be at most one reader and one writer at a time (the per-connection
-// read/write goroutine model).
+// Read 和 Write 各自可由一个 goroutine 并发驱动，但同一时刻至多一个读者、
+// 一个写者（每连接「一读一写」goroutine 模型）。
 type Conn interface {
-	// ReadFrame blocks until a frame arrives, ctx is cancelled, or the
-	// connection fails.
+	// ReadFrame 阻塞直到有帧到达、ctx 被取消、或连接失败。
 	ReadFrame(ctx context.Context) (Frame, error)
-	// WriteFrame sends a frame.
+	// WriteFrame 发送一个帧。
 	WriteFrame(ctx context.Context, f Frame) error
-	// Ping sends a liveness ping and waits for the matching pong (or ctx).
+	// Ping 发送一个保活 ping 并等待匹配的 pong（或 ctx）。
 	Ping(ctx context.Context) error
-	// Close closes the connection with a status code and reason.
+	// Close 以一个状态码和原因关闭连接。
 	Close(status StatusCode, reason string) error
 }

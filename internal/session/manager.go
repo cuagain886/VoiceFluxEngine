@@ -18,15 +18,14 @@ import (
 	"voicestream/internal/transport/transportpb"
 )
 
-// Manager owns every live session: creation on first contact, reattachment
-// on reconnect, idle-timeout reclamation. Session state is in-process by
-// design (the optional Redis externalization is a separate, off-by-default
-// peripheral — task 12.1).
+// Manager 拥有每一个活动会话：首次接触时创建、重连时重新附着、空闲超时时
+// 回收。会话状态按设计是进程内的（可选的 Redis 外置化是一个独立、默认关闭
+// 的外设——任务 12.1）。
 type Manager struct {
 	cfg config.Config
 	set adapter.Set
 	log *slog.Logger
-	m   *metrics.M // nil = instrumentation disabled
+	m   *metrics.M // nil = 关闭埋点
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -36,8 +35,8 @@ type Manager struct {
 	sessionsReclaimed atomic.Uint64
 }
 
-// NewManager builds a manager; call Run to start the idle reaper. m may be
-// nil to disable metrics (tests).
+// NewManager 构建一个 manager；调用 Run 启动空闲回收器。m 可为 nil 以关闭
+// 指标（测试用）。
 func NewManager(cfg config.Config, set adapter.Set, logger *slog.Logger, m *metrics.M) *Manager {
 	if logger == nil {
 		logger = slog.Default()
@@ -49,9 +48,9 @@ func NewManager(cfg config.Config, set adapter.Set, logger *slog.Logger, m *metr
 	return mgr
 }
 
-// registerGauges exposes scrape-time values: live session count plus the
-// frame-hygiene totals (live sessions summed on the fly + totals accumulated
-// from reclaimed ones, so counters stay monotonic across session churn).
+// registerGauges 暴露抓取期才采样的值：活动会话数，以及各项帧卫生总量
+//（活动会话当场求和 + 已回收会话累计下来的总量，于是计数器在会话翻滚下
+// 仍保持单调）。
 func (mgr *Manager) registerGauges() {
 	r := mgr.m.Registry
 	r.NewGaugeFunc("voicestream_sessions_active", "Live sessions.", func() float64 {
@@ -66,6 +65,8 @@ func (mgr *Manager) registerGauges() {
 	r.NewGaugeFunc("voicestream_stale_epoch_claims_total", "Rejected stale reconnect claims.", func() float64 {
 		return float64(mgr.staleEpochClaims.Load())
 	})
+	// sum 返回一个抓取期函数：累计值（来自已回收会话）+ 当前所有活动会话
+	// 的实时求和——这就是「翻滚下保持单调」的实现。
 	sum := func(acc *atomic.Uint64, live func(*Session) uint64) func() float64 {
 		return func() float64 {
 			total := acc.Load()
@@ -89,8 +90,9 @@ func (mgr *Manager) registerGauges() {
 		sum(&mgr.m.AccIllegalEvents, func(s *Session) uint64 { return s.ctrl.IllegalEvents() }))
 }
 
-// Run drives the idle reaper until ctx ends, then reclaims everything.
+// Run 驱动空闲回收器直到 ctx 结束，然后回收一切。
 func (m *Manager) Run(ctx context.Context) {
+	// 回收检查频率取空闲超时的 1/4，并钳制在 [10ms, 1s]。
 	tick := m.cfg.Session.IdleTimeout / 4
 	if tick > time.Second {
 		tick = time.Second
@@ -113,18 +115,18 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-// Count reports live sessions (the 8.4 leak gate).
+// Count 报告活动会话数（8.4 泄漏门禁）。
 func (m *Manager) Count() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.sessions)
 }
 
-// StaleEpochClaims counts rejected reconnect attempts with a non-increasing
-// epoch (the "old connection trying to pollute the new one" metric).
+// StaleEpochClaims 统计被拒绝的「epoch 未递增」重连尝试（即「旧连接试图污染
+// 新连接」这一指标）。
 func (m *Manager) StaleEpochClaims() uint64 { return m.staleEpochClaims.Load() }
 
-// Stats exposes a session's frame-hygiene counters (tests, M9 metrics).
+// Stats 暴露一个会话的帧卫生计数器（测试、M9 指标）。
 type Stats struct {
 	Epoch         uint64
 	DupFrames     uint64
@@ -132,7 +134,7 @@ type Stats struct {
 	SubtitleDrops uint64
 }
 
-// SessionStats returns counters for a live session.
+// SessionStats 返回一个活动会话的计数器。
 func (m *Manager) SessionStats(id string) (Stats, bool) {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
@@ -151,9 +153,8 @@ func (m *Manager) SessionStats(id string) (Stats, bool) {
 	}, true
 }
 
-// Handler returns the per-connection transport handler: handshake first
-// (a CONTROL START frame), then attach the connection to its session and
-// serve until the attachment ends.
+// Handler 返回每连接的传输 handler：先握手（一个 CONTROL START 帧），再把
+// 连接附着到它的会话上，serve 直到附着结束。
 func (m *Manager) Handler() transport.Handler {
 	return func(ctx context.Context, conn transport.Conn) error {
 		hctx, hcancel := context.WithTimeout(ctx, 5*time.Second)
@@ -176,8 +177,7 @@ func (m *Manager) Handler() transport.Handler {
 		}
 		att, err := s.attach(conn, start.Epoch, detail)
 		if err != nil {
-			// Lost a race with reclamation or a concurrent claim; report and
-			// let the client retry with a fresh handshake.
+			// 与回收或并发认领竞争失败；报错，让客户端用新一轮握手重试。
 			m.staleEpochClaims.Add(1)
 			return writeError(ctx, conn, err.Error())
 		}
@@ -186,9 +186,8 @@ func (m *Manager) Handler() transport.Handler {
 	}
 }
 
-// resolve maps a START to its session: new id for an empty/unknown one
-// (an expired session resumes as a fresh conversation rather than an error),
-// the existing session otherwise.
+// resolve 把一个 START 映射到它的会话：空的/未知的 id 给一个新 id（一个
+// 过期会话以「全新对话」恢复，而不是报错），否则返回已有会话。
 func (m *Manager) resolve(start *transportpb.ControlPayload) (*Session, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -207,8 +206,8 @@ func (m *Manager) resolve(start *transportpb.ControlPayload) (*Session, string, 
 	detail := "created"
 	if start.SessionId != "" {
 		detail = "expired; new session created"
-		// A fresh session must not inherit the stale claim's epoch floor:
-		// normalize the claim so attach treats it as a first connection.
+		// 一个全新会话不应继承陈旧认领的 epoch 下限：把认领归一化，让
+		// attach 把它当作首次连接来处理。
 		start.Epoch = 1
 	} else if start.Epoch == 0 {
 		start.Epoch = 1
@@ -235,21 +234,20 @@ func (m *Manager) snapshot() []*Session {
 	return out
 }
 
-// reclaim removes the session and releases everything it owns: pipeline
-// goroutines, rings, the attached connection.
+// reclaim 移除会话并释放它拥有的一切：流水线 goroutine、环、附着的连接。
 func (m *Manager) reclaim(s *Session, reason string) {
 	m.mu.Lock()
 	if _, ok := m.sessions[s.id]; !ok {
 		m.mu.Unlock()
-		return // already reclaimed
+		return // 已被回收
 	}
 	delete(m.sessions, s.id)
 	m.mu.Unlock()
 	s.close()
 	m.sessionsReclaimed.Add(1)
 	if m.m != nil {
-		// Fold the dead session's counters into the process totals so the
-		// exported counters stay monotonic across churn.
+		// 把这个已死会话的计数器折叠进进程级总量，使导出的计数器在翻滚下
+		// 保持单调。
 		m.m.AccIngressDropped.Add(s.pipe.IngressDropped())
 		m.m.AccEgressDropped.Add(s.pipe.EgressDropped())
 		m.m.AccDupFrames.Add(s.dupFrames.Load())
@@ -263,8 +261,8 @@ func (m *Manager) reclaim(s *Session, reason string) {
 func newSessionID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failing is unrecoverable enough that a panic beats
-		// silently issuing predictable session ids.
+		// crypto/rand 失败的严重程度足以让 panic 强过「悄悄发出可预测的
+		// 会话 id」。
 		panic("session: crypto/rand: " + err.Error())
 	}
 	return hex.EncodeToString(b[:])
@@ -287,7 +285,7 @@ func writeError(ctx context.Context, conn transport.Conn, detail string) error {
 	return nil
 }
 
-// adapterSetFor builds the per-session adapter set. Mocks are stateful per
-// stream call but safe to share; still, building per session keeps real
-// adapters (own HTTP clients, future local models) isolated.
+// adapterSetFor 构建每会话的适配器集合。mock 在每次 stream 调用内是有状态的，
+// 但共享是安全的；尽管如此，按会话构建仍让真实适配器（自带 HTTP 客户端、
+// 未来的本地模型）彼此隔离。
 func (m *Manager) adapterSetFor() adapter.Set { return m.set }
