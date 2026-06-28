@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>voicestream · 实时语音对话演示</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: #0d1117; color: #e6edf3;
+      font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    main { width: min(680px, 92vw); }
+    h1 { font-size: 1.15rem; font-weight: 600; color: #7ee0c2; margin: 0 0 4px; }
+    .sub { color: #8b949e; font-size: 0.82rem; margin-bottom: 24px; }
+    #status {
+      padding: 10px 14px; border-radius: 8px; background: #161b22;
+      border: 1px solid #30363d; font-size: 0.95rem; margin-bottom: 16px; min-height: 1.4em;
+    }
+    .line {
+      padding: 12px 14px; border-radius: 8px; margin-bottom: 12px; min-height: 3em;
+      font-size: 1.02rem; line-height: 1.55; white-space: pre-wrap;
+    }
+    .line .tag { display: block; font-size: 0.75rem; color: #8b949e; margin-bottom: 4px; }
+    #user-wrap { background: #11161d; border: 1px solid #1f6feb44; }
+    #agent-wrap { background: #11161d; border: 1px solid #2ea04344; }
+    #user-line { color: #79c0ff; opacity: 0.75; }
+    #user-line.final { opacity: 1; }
+    #agent-line { color: #7ee787; }
+    #btn {
+      width: 100%; padding: 13px; font-size: 1.05rem; border-radius: 8px; cursor: pointer;
+      border: 1px solid #2ea043; background: #1a7f37; color: #fff; margin-top: 6px;
+    }
+    #btn:hover { background: #2ea043; }
+    #stats { color: #8b949e; font-size: 0.78rem; margin-top: 14px; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>voicestream</h1>
+    <div class="sub">实时语音对话内核演示 —— 时序 / 背压 / 打断。直接说话，Agent 回应时开口即可自然打断。</div>
+    <div id="status">点击开始，并允许使用麦克风</div>
+    <div class="line" id="user-wrap"><span class="tag">你</span><span id="user-line"></span></div>
+    <div class="line" id="agent-wrap"><span class="tag">Agent</span><span id="agent-line"></span></div>
+    <button id="btn">开始对话</button>
+    <div id="stats"></div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

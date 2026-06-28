@@ -1,0 +1,16 @@
+# voicestream 压测配置（M10）：全 mock，但给 mock 注入接近真实模型的时延形状，
+# 使每轮响应有真实的"在飞"窗口（可被打断、可被排队拉长）。
+#   $env:VOICESTREAM_CONFIG = "configs/loadtest.yaml"; go run ./cmd/server
+server:
+  addr: ":8080"
+  static_dir: "" # 压测不需要演示页
+
+adapters:
+  asr: mock
+  llm: openai-compat
+  tts: mock
+  mock:
+    asr_final_delay: 60ms  # 停顿 -> final 转写
+    llm_token_delay: 25ms  # 每 token（流式吐字节奏）
+    llm_token_jitter: 10ms
+    tts_frame_delay: 18ms  # 每帧合成略快于实时（20ms/帧），响应全程在飞

@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package voicestream.transport.v1;
+
+option go_package = "voicestream/internal/transport/transportpb;transportpb";
+
+// FrameType identifies the logical stream a frame belongs to. The value is
+// carried in the fixed binary header's 1-byte `type` field (see frame.go).
+enum FrameType {
+  FRAME_TYPE_UNSPECIFIED = 0;
+  FRAME_TYPE_AUDIO = 1;   // payload = raw PCM bytes (NOT protobuf)
+  FRAME_TYPE_TEXT = 2;    // payload = TextPayload
+  FRAME_TYPE_CONTROL = 3; // payload = ControlPayload
+}
+
+// TextSource tells the client which conversational lane a TEXT frame
+// belongs to, so transcripts and agent subtitles render separately.
+enum TextSource {
+  TEXT_SOURCE_UNSPECIFIED = 0;
+  TEXT_SOURCE_TRANSCRIPT = 1; // ASR result: what the user said
+  TEXT_SOURCE_TOKEN = 2;      // LLM token: what the agent is saying
+}
+
+// TextPayload carries an incremental or final transcript / token.
+message TextPayload {
+  string text = 1;
+  bool final = 2; // true = final (e.g. ASR final / utterance end)
+  TextSource source = 3;
+}
+
+// ControlKind enumerates control-plane signals.
+enum ControlKind {
+  CONTROL_KIND_UNSPECIFIED = 0;
+  CONTROL_KIND_START = 1;
+  CONTROL_KIND_STOP = 2;
+  CONTROL_KIND_BARGE_IN = 3;
+  CONTROL_KIND_ERROR = 4;
+}
+
+// ControlPayload carries a control-plane signal.
+//
+// START doubles as the session handshake (M8). Client -> server: session_id
+// empty for a new session, or a previous id with a claimed epoch strictly
+// greater than the last known one to resume; last_seq is the highest downlink
+// seq the client received. Server -> client (the ack): the authoritative
+// session_id/epoch, and last_seq = the highest uplink seq the server has
+// delivered (the client may skip replaying anything at or below it).
+message ControlPayload {
+  ControlKind kind = 1;
+  string detail = 2; // optional human-readable detail (e.g. error message)
+  string session_id = 3;
+  uint64 epoch = 4;
+  uint64 last_seq = 5;
+}
