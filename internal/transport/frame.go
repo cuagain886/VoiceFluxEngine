@@ -64,7 +64,7 @@ func (f Frame) MarshalBinary() ([]byte, error) {
 }
 
 // AppendBinary 把编码后的帧追加到 buf 并返回扩展后的切片
-//（encoding.BinaryAppender）。传输写路径为每个连接保留一块 scratch 缓冲并
+// （encoding.BinaryAppender）。传输写路径为每个连接保留一块 scratch 缓冲并
 // 重复编码进去，于是稳态下行编码零分配（11.2 的零分配门禁）。
 func (f Frame) AppendBinary(buf []byte) ([]byte, error) {
 	if len(f.Payload) > MaxPayload {
@@ -86,30 +86,41 @@ func (f Frame) encodeHeader(buf []byte) {
 	binary.BigEndian.PutUint32(buf[20:24], uint32(len(f.Payload)))
 }
 
+// decodeHeader 校验并解析固定头（前 HeaderSize 字节），返回不含 Payload 的
+// Frame 与声明的负载长度。它让「整条消息一把解（Decode）」与「头/负载分开读进
+// 复用缓冲（ReadFrameInto）」两条路径共用同一套校验。
+func decodeHeader(hdr []byte) (Frame, int, error) {
+	if len(hdr) < HeaderSize {
+		return Frame{}, 0, ErrShortHeader
+	}
+	if hdr[0] != Magic0 || hdr[1] != Magic1 {
+		return Frame{}, 0, ErrBadMagic
+	}
+	if hdr[2] != Version {
+		return Frame{}, 0, fmt.Errorf("%w: got %d want %d", ErrVersion, hdr[2], Version)
+	}
+	length := binary.BigEndian.Uint32(hdr[20:24])
+	if length > MaxPayload {
+		return Frame{}, 0, fmt.Errorf("%w: %d > %d", ErrPayloadTooLarge, length, MaxPayload)
+	}
+	return Frame{
+		Type: transportpb.FrameType(hdr[3]),
+		Seq:  binary.BigEndian.Uint64(hdr[4:12]),
+		TsUs: int64(binary.BigEndian.Uint64(hdr[12:20])),
+	}, int(length), nil
+}
+
 // Decode 从 buf 解析出一个完整帧（头 + 负载）；在 WebSocket 传输上 buf 恰好
 // 是一条二进制消息。返回的 Frame 的 Payload 是 buf 的别名（共享底层数组）；
 // 若需在 buf 生命周期之外保留它，请自行拷贝。
 func Decode(buf []byte) (Frame, error) {
-	if len(buf) < HeaderSize {
-		return Frame{}, ErrShortHeader
+	f, length, err := decodeHeader(buf)
+	if err != nil {
+		return Frame{}, err
 	}
-	if buf[0] != Magic0 || buf[1] != Magic1 {
-		return Frame{}, ErrBadMagic
-	}
-	if buf[2] != Version {
-		return Frame{}, fmt.Errorf("%w: got %d want %d", ErrVersion, buf[2], Version)
-	}
-	length := binary.BigEndian.Uint32(buf[20:24])
-	if length > MaxPayload {
-		return Frame{}, fmt.Errorf("%w: %d > %d", ErrPayloadTooLarge, length, MaxPayload)
-	}
-	if len(buf) != HeaderSize+int(length) {
+	if len(buf) != HeaderSize+length {
 		return Frame{}, fmt.Errorf("%w: header says %d, have %d", ErrFrameLength, length, len(buf)-HeaderSize)
 	}
-	return Frame{
-		Type:    transportpb.FrameType(buf[3]),
-		Seq:     binary.BigEndian.Uint64(buf[4:12]),
-		TsUs:    int64(binary.BigEndian.Uint64(buf[12:20])),
-		Payload: buf[HeaderSize : HeaderSize+int(length)],
-	}, nil
+	f.Payload = buf[HeaderSize : HeaderSize+length]
+	return f, nil
 }

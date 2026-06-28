@@ -84,7 +84,7 @@ transport.Server → 路由挂载。**不深入任何调用**，画一张"谁创
 - 文档：`M3-ringbuf-design-zh.md`（先读"为什么经典双游标不行"一节再看代码）
 - 能回答：槽序列号的取值如何编码"该槽归谁"？drop-oldest 为什么让生产者
   执行 CAS head？为什么消费者 pop 用 CAS 而单纯 SPSC 本不需要？填充买到
-  了什么（背出 37.6 vs 85.8ns）？
+  了什么（背出 33.3 vs 76.1ns）？
 - 实验：①删掉 `_pad` 字段跑 `-bench SPSC` 看吞吐掉多少；②把 Push 的
   驱逐分支改成"直接覆盖不 CAS"，跑 `-race` 测试看它怎么红。
 

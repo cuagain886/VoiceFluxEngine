@@ -139,7 +139,7 @@ The pool degrades instead of failing: `Get` on an exhausted free list falls
 back to `make` (counted in `Misses()` — a metrics hook for M9), and `Put` of
 excess or undersized buffers lets them fall to the GC.
 
-Gates (both in CI via `go test` + bench):
+Gates (run locally via `go test` + bench):
 
 - `TestSteadyStateZeroAlloc`: `testing.AllocsPerRun` over a full
   pool→ring→pool cycle with 640-byte PCM frames == **0**.

@@ -1,0 +1,37 @@
+# voicestream 接入 sherpa-onnx 流式 ASR/TTS 的示例配置。
+#
+# 前提：先跑一个 sherpa-onnx 驱动的流式 WebSocket sidecar（参考 ruzhila/voiceapi），
+# 监听 :8000、暴露 /asr 与 /tts、两端收发 16-bit PCM。详见 docs/sherpa-adapter-zh.md。
+#   $env:VOICESTREAM_CONFIG = "configs/sherpa.yaml"; go run ./cmd/server
+#
+# LLM 仍可走 mock（离线自洽）或 openai-compat（接云，需 VOICESTREAM_LLM_API_KEY）。
+adapters:
+  asr: sherpa
+  llm: openai-compat
+  tts: sherpa
+  sherpa:
+    asr_url: "ws://127.0.0.1:8000/asr"
+    tts_url: "ws://127.0.0.1:8000/tts"
+    tts_speaker_id: 200
+    tts_speed: 1.15
+    # 本地 sherpa TTS 慢/变化大时，sidecar 端点定稿要等尾静音——下面两个收尾参数
+    # 默认 1500/4000ms，可按 sidecar 的 rule2_min_trailing_silence 调：
+    # asr_silence_tail_ms: 1500
+    # asr_final_wait_ms: 4000
+  # 本地 sherpa vits TTS 在弱机/争抢下会很慢（RTF 飙到几倍～十几倍）。想换成更快的
+  # 云 TTS，把上面 tts 改成 openai-tts，并填下面这段；key 只走环境变量（VOICESTREAM_TTS_API_KEY），
+  # 绝不写进文件。注意：端点必须回 16kHz 裸 PCM（真实 OpenAI 的 pcm 是 24kHz，需用可配
+  # 采样率的兼容服务，或把 audio.sample_rate 设成 24000），否则音高会错。
+  # tts: openai-tts
+  # openai_tts:
+  #   base_url: "https://api.openai.com/v1"
+  #   model: "tts-1"
+  #   voice: "alloy"
+  #   format: "pcm"
+  #   speed: 1.0
+  #   # sample_rate: 16000        # 留空则取 audio.sample_rate
+  #   api_key_env: "VOICESTREAM_TTS_API_KEY"
+  # 默认已内置一段"语音助手"系统提示词（约束模型只说纯口语、不输出 Markdown/emoji，
+  # 否则 TTS 会把"星号""井号"逐字读出）。想改语气/语言就取消下面注释、覆盖它：
+  # cloud_llm:
+  #   system_prompt: "你是一个简洁的语音助手，只说能被读出来的纯文本，不用任何符号。"

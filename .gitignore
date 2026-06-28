@@ -4,7 +4,13 @@
 openspec/
 docs/requirement.md
 docs/learning-plan.md
-# Note: docs/ is intentionally tracked (project convention: docs per module).
+CLAUDE.md
+.env
+docs/.obsidian/
+
+# Third-party local sidecar (ruzhila/voiceapi): cloned locally only to run the
+# sherpa-onnx ASR/TTS server. Its own git repo, ~1.6GB venv+models. Not ours.
+voiceapi/
 
 # Go
 /bin/
@@ -13,8 +19,9 @@ docs/learning-plan.md
 *.out
 coverage.*
 
+# Tests — kept local, run with `go test ./...`, but not tracked in git.
+*_test.go
+
 # OS
 Thumbs.db
 Desktop.ini
-docs/requirement-zh.md
-docs/learning-plan-zh.md

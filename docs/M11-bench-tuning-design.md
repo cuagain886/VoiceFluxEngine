@@ -10,26 +10,26 @@
 
 基准：`internal/ringbuf/chan_bench_test.go`，与既有环基准逐场景镜像，
 双方都按惯用法使用（channel 阻塞收发，环自旋）——唯一变量是跳点原语。
-i7-13620H，`-count=5` 取中位数（原始数据 `docs/bench/chan-vs-ring.txt`，
+i7-13620H，`-count=6` 取中位数（原始数据 `docs/bench/chan-vs-ring.txt`，
 图 `docs/assets/bench-chan-vs-ring.svg`）：
 
 | 场景 | channel | ring | 比 |
 |---|---|---|---|
-| SPSC 跨核搬运（int） | 49.1 ns/op | 37.6 ns/op | 1.3× |
-| SPSC 音频帧（640B + 同一缓冲池） | 95.6 ns/op | 61.4 ns/op | 1.6× |
-| 饱和 drop-oldest（无消费者） | 29.3 ns/op | 27.6 ns/op | ~持平 |
-| 跨核往返时延（ping-pong RTT） | 397.9 ns/op | 229.4 ns/op | 1.7× |
+| SPSC 跨核搬运（int） | 70.8 ns/op | 33.3 ns/op | 2.1× |
+| SPSC 音频帧（640B + 同一缓冲池） | 152.6 ns/op | 72.4 ns/op | 2.1× |
+| 饱和 drop-oldest（无消费者） | 38.4 ns/op | 34.7 ns/op | ~持平 |
+| 跨核往返时延（ping-pong RTT） | 563.5 ns/op | 150.9 ns/op | 3.7× |
 | allocs/op（全部场景） | 0 | 0 | 持平 |
 
 **诚实结论**：
 
-1. 环赢在 1.3–1.7×，不是数量级——音频两端 50fps/路的频率下这是有意义
+1. 环赢在 2.1–3.7×，不是数量级——音频两端 50fps/路的频率下这是有意义
    但不戏剧化的收益。真正不可替代的是 **drop-oldest 的原子性**：channel
    的 select 模拟（非阻塞发→失败驱逐一个→重试）在与活跃消费者并发时
    驱逐与重发可交错，"满了挤掉最旧"的语义不成立；环的逐槽序列号使该
    操作免竞争（M3 设计的核心论点，基准把它落成数字）。
-2. **做错的无锁结构比 channel 更慢**：去掉伪共享填充的环 85.8 ns/op，
-   劣于 channel 的 49.1。cache line 填充不是装饰，是这个数据结构成立的
+2. **做错的无锁结构比 channel 更慢**：去掉伪共享填充的环 76.1 ns/op，
+   劣于 channel 的 70.8。cache line 填充不是装饰，是这个数据结构成立的
    前提。
 3. 双方稳态都零分配——"零分配"不构成选环的理由，时延与语义才是。
 

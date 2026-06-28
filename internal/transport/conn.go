@@ -30,3 +30,12 @@ type Conn interface {
 	// Close 以一个状态码和原因关闭连接。
 	Close(status StatusCode, reason string) error
 }
+
+// FramePooledReader 是 Conn 的可选扩展：把帧 payload 读进调用方提供（通常来自缓冲池）
+// 的 dst，绕开逐消息分配，让上行热路径零分配。真实 WebSocket 连接实现它；不实现的
+// Conn（测试桩等）由调用方类型断言失败后回退到 ReadFrame。dst 会按需扩容并原样返回，
+// 返回的 Frame.Payload 即 dst[:n]、偏移 0、整块容量，可整块归还池。
+type FramePooledReader interface {
+	Conn
+	ReadFrameInto(ctx context.Context, dst []byte) (Frame, []byte, error)
+}

@@ -33,16 +33,19 @@ func init() {
 		if key == "" {
 			return nil, fmt.Errorf("openaicompat: API key env %s is empty", c.APIKeyEnv)
 		}
-		return New(c.BaseURL, c.Model, key), nil
+		l := New(c.BaseURL, c.Model, key)
+		l.systemPrompt = c.SystemPrompt // 前置 system 消息，约束为纯口语文本（见 config）
+		return l, nil
 	})
 }
 
 // LLM 从一个 OpenAI 兼容端点流式获取 chat completions。
 type LLM struct {
-	baseURL string
-	model   string
-	apiKey  string
-	client  *http.Client
+	baseURL      string
+	model        string
+	apiKey       string
+	systemPrompt string // 非空则作为首条 system 消息前置到每次请求
+	client       *http.Client
 }
 
 // New 返回针对给定端点的适配器。baseURL 是 API 根（如
@@ -86,7 +89,12 @@ type chatChunk struct {
 // 发来 [DONE]、流结束、或 ctx 被取消时返回——取消会中止底层 HTTP 请求，于是
 // 连接（以及服务商那边的生成）及时停止，这正是打断所需要的。
 func (l *LLM) Stream(ctx context.Context, turn adapter.Turn, out chan<- adapter.Token) error {
-	msgs := make([]chatMessage, 0, len(turn.History)+1)
+	msgs := make([]chatMessage, 0, len(turn.History)+2)
+	if l.systemPrompt != "" {
+		// 每次请求都新鲜前置 system 消息——而非种进 History（那会被流水线的
+		// maxHistory 截断在几轮后丢掉）。
+		msgs = append(msgs, chatMessage{Role: "system", Content: l.systemPrompt})
+	}
 	for _, m := range turn.History {
 		msgs = append(msgs, chatMessage{Role: m.Role, Content: m.Text})
 	}

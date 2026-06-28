@@ -6,9 +6,9 @@ Maps to spec `model-adapters` and design decision **D8** (unified streaming
 interfaces; cloud-first; early real LLM). Tasks: 4.1–4.5.
 
 > Live acceptance note: the real-provider test (`TestLiveProvider`) is gated on
-> `VOICESTREAM_LLM_API_KEY` and skips without it. CI exercises the adapter
-> against a canned SSE server instead, so the contract is verified on every
-> run; the live lane needs a key.
+> `VOICESTREAM_LLM_API_KEY` and skips without it. `go test ./...` exercises the
+> adapter against a canned SSE server instead, so the contract is verified
+> locally on every run; the live lane needs a key.
 
 ## 1. Purpose
 
@@ -126,7 +126,7 @@ Implementation decisions:
   audio→ASR→LLM→TTS→audio chain runs through interfaces alone with monotonic
   output PTS.
 - **真实接口相容**: canned-SSE `httptest` server verifies parsing, history
-  serialization, auth header, provider-error surfacing — on every CI run.
+  serialization, auth header, provider-error surfacing — on every `go test` run.
   `TestLiveProvider` (key-gated) verifies real token timing end to end.
 
 ## References

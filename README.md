@@ -1,99 +1,217 @@
-# voicestream
+<div align="center">
 
-实时多模态语音 Agent 的**流式内核**（Go）。它是夹在麦克风/扬声器与 AI 模型之间的
-模型无关中间层，只负责三件事：**时序 / 背压 / 打断**。ASR、LLM、TTS 是可插拔的
-租户，不是内核的一部分。
+# VoiceFluxEngine
 
-> 北极星：浏览器里能对话、能在 Agent 应答中**自然打断**，且这条会话运行在被压到
-> 容量拐点的真实负载之中——交付物是一条带拐点与优雅降级证明的负载/延迟曲线。
+**A real-time, model-agnostic _streaming kernel_ for voice agents.**
 
-![架构图](docs/assets/architecture.svg)
+It owns three things only — **Timing · Backpressure · Interruption** (时序 / 背压 / 打断).
+ASR / LLM / TTS are pluggable tenants, *not* part of the kernel.
 
-## 它证明了什么
+[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Transport: WebSocket](https://img.shields.io/badge/transport-WebSocket-blue)
+![Dependencies: near-zero](https://img.shields.io/badge/deps-near--zero-success)
 
-| 指标 | 实测 | 出处 |
+**English** · [简体中文](README.zh-CN.md)
+
+</div>
+
+![architecture](docs/assets/architecture.svg)
+
+> **North Star:** a browser conversation you can **interrupt naturally** mid-response, running on a connection pushed to its capacity knee — the deliverable is a load/latency curve with a *proven* knee and graceful degradation.
+
+---
+
+## Contents
+
+- [Why it exists](#why-it-exists)
+- [What it proves](#what-it-proves)
+- [Features](#features)
+- [Quick start](#quick-start)
+- [Benchmarks](#benchmarks)
+- [Design highlights](#design-highlights)
+- [Documentation](#documentation)
+- [Scope (v1)](#scope-v1)
+- [License](#license)
+
+## Why it exists
+
+Most "voice agent" stacks bolt ASR → LLM → TTS together and hope the timing works out. The hard part isn't the models — it's the **kernel** that sits between mic/speaker and the models: *when* to cut the user off, *how* to shed load when a model stalls, and *how fast* it can cancel an in-flight response the instant the user speaks again.
+
+VoiceFluxEngine is **only** that kernel. Models are tenants you plug in by config — swap a mock for sherpa-onnx ASR, or DeepSeek for a local Ollama, without touching the kernel.
+
+> Go module name is `voicestream`; the repository is `VoiceFluxEngine`.
+
+## What it proves
+
+| Metric | Measured | Source |
 |---|---|---|
-| 打断（内核取消）p99 | **&lt;2ms** 平台区 · **≤143ms** @ 3×拐点负载（预算 200ms） | M10 容量曲线 |
-| 内核开销 p99（首响减模型固有时延） | **5ms** 平台区恒定 | M9/M10 分解口径 |
-| 容量拐点 | ~500 并发会话（i7-13620H · 功率受限 · loadgen 同机，**下界**） | M10 |
-| 过墙行为 | 入口 drop-oldest 卸载 21→38%、出口零丢帧、无崩溃无 OOM；5000 会话过载后回落 0 会话/7 goroutines | M10 |
-| 音频热路径分配 | 环 SPSC 0 allocs/op · 下行编码 0 allocs/op（测试门禁） | M3/M11 |
+| Barge-in (kernel cancel) p99 | **&lt;2 ms** on the plateau · **≤143 ms** @ 3× knee load (budget 200 ms) | M10 capacity curve |
+| Kernel overhead p99 (first-response − model latency) | **5 ms**, flat across the plateau | M9 / M10 decomposition |
+| Capacity knee | **~500** concurrent sessions (i7-13620H · power-limited · loadgen co-located → **lower bound**) | M10 |
+| Past-the-knee behavior | ingress drop-oldest sheds 21→38%, **egress zero drops**, no crash / no OOM; recovers to 0 sessions / 7 goroutines after a 5000-session storm | M10 |
+| Audio hot-path allocation | ring SPSC **0 allocs/op** · downlink encode **0 allocs/op** (test-gated) | M3 / M11 |
 
-### 容量曲线（L2）
+> **Honesty over hype.** Numbers are single-machine, power-limited, with the load generator co-located on the same box — treat them as **lower bounds**, not leaderboard entries.
 
-![容量曲线](docs/assets/capacity-curve.svg)
+## Features
 
-平台区一切平直；拐点处 CPU 墙先到；过墙后**双背压按设计在入口卸载**——压力沿
-TTS→token→finals→ASR 链传回，表现为入口丢帧（计数）而非内存增长或崩溃。
-交互式版本：`docs/load/capacity.html`；复现：`go run ./cmd/loadgen -h`。
+- 🎙️ **Natural barge-in.** Inline energy VAD (inside the ingress read goroutine, keeping audio strictly SPSC) drives a 4-state machine; `RESPONDING + speech_start` cancels the response sub-chain and flushes in-flight audio. The cancel path never goes through a congested queue, so the 200 ms budget holds even under overload.
+- ⚖️ **Dual backpressure, split by data semantics.** High-rate audio edges (50 fps/stream) use a lock-free **SPSC ring with drop-oldest** — dropping stale real-time audio is a *feature*. Low-rate text uses **bounded blocking channels** — text must not drop. They converge at ingress: a slow model → chained blocking → *counted* ingress drops, with memory bounded by construction.
+- 🔌 **Model-agnostic adapters.** Swap ASR / LLM / TTS by config, no kernel changes. **LLM** = any OpenAI-compatible SSE endpoint (cloud or local); **ASR/TTS** = open-source sherpa-onnx (local sidecar) or built-in mocks.
+- 📊 **Observability as backdrop.** Hand-rolled Prometheus text format (~150 lines, zero deps) + an SSE latency-**waterfall** dashboard. First-response is decomposed into *model latency* + *kernel overhead* and measured separately — the kernel never takes credit for the model.
+- 🧪 **Load harness + capacity curve.** Ramp concurrent virtual sessions through the *real* hot path; find the knee and prove graceful degradation.
+- 🪶 **Zero-alloc audio hot path.** The SPSC ring and downlink encoder run at 0 allocs/op, enforced by test gates.
+- 🌐 **WebSocket + binary frame protocol.** protobuf for TEXT / CONTROL payloads, raw PCM for audio; 16 kHz / 16-bit / mono assumed at the wire.
 
-### 延迟瀑布图（L1）
-
-![瀑布图](docs/assets/waterfall.svg)
-
-LLM 与 TTS 时间条天然大面积重叠——这就是流水线；灰色串行条是同样三段跨度
-首尾相接的长度。被打断的轮红框标注内核取消耗时。实时版本跑在
-`http://localhost:8080/dash.html`（SSE 逐轮推送）。
-
-### channels vs 无锁环形缓冲（L3）
-
-![对照基准](docs/assets/bench-chan-vs-ring.svg)
-
-环不是为了打榜：drop-oldest 速度几乎持平，真正的差异是**驱逐语义的原子性**
-（channel 的 select 模拟在并发下不成立）。另一个诚实发现：去掉伪共享填充的环
-比 channel 还慢——无锁结构做错了不如不做。
-
-### 打断演示（L0 北极星）
-
-<!-- TODO(7.6): docs/assets/barge-in.gif —— 真实麦克风录制：
-     go run ./cmd/server → Chrome http://localhost:8080/ →
-     说一句话 → 应答中再次开口 → 状态条显示打断、播放即停。
-     推荐 ScreenToGif 录制浏览器窗口。 -->
-*待真实麦克风录制（任务 7.6）——代码与服务端 e2e 已就绪，见 `web/`。*
-
-## 快速开始
+## Quick start
 
 ```bash
-go run ./cmd/server          # 默认全 mock，浏览器打开 http://localhost:8080/
-go test -race ./...          # 全量测试
-go run ./cmd/loadgen \
-  -steps 50,100,200,400,800 -out docs/load   # 复现容量曲线
+go build ./...   # Go 1.26+
 ```
 
-接真实 LLM（任何 OpenAI 兼容端点，密钥只走环境变量）：
+### 1 · Fastest path: all-mock, zero external dependencies
 
 ```bash
-export VOICESTREAM_LLM_API_KEY=sk-...
-# config.yaml: adapters.llm: openai-compat（base_url/model 见 internal/config）
-VOICESTREAM_CONFIG=config.yaml go run ./cmd/server
+go run ./cmd/server   # then open http://localhost:8080/
 ```
 
-## 设计要点（详见 docs/）
+Talk into the mic → hear a mock echo reply → **speak again mid-reply to interrupt it**. No models or keys required — this exercises the kernel itself: timing / backpressure / interruption.
 
-- **双背压按数据语义分流**：音频两端高频（50fps/路）走无锁 SPSC 环 + drop-oldest
-  （实时音频丢旧帧是 feature）；文本中段低频走有界 channel 阻塞回传（文本不可丢）。
-  两者在入口汇合：慢模型 → 链式阻塞 → 表现为入口计数丢帧，内存有界为构造性质。
-- **打断是控制面**：内联能量 VAD（入口读 goroutine 内，保持严格 SPSC）驱动四态
-  状态机；`RESPONDING + speech_start` → 子链 ctx 取消 + 在途清空。取消路径不经过
-  拥塞队列，所以 200ms 预算在过载下依然成立。
-- **会话与连接解耦**：单调 epoch 防陈旧帧污染、seq 水位去重（TCP 有序使重排窗口
-  不必要——诚实地不做）、断线重连续传、idle 回收兜底。
-- **可观测性是背景板**：手写 Prometheus 文本格式（~150 行零依赖）、SSE 瀑布仪表盘；
-  首响 = 模型固有时延 + 内核开销，分开计量，绝不给内核贴模型的金。
+### 2 · Real ASR / TTS via sherpa-onnx (local sidecar)
 
-| 文档 | 内容 |
+The kernel embeds no models — it's just a WebSocket client to a sherpa-onnx sidecar (here [ruzhila/voiceapi](https://github.com/ruzhila/voiceapi)). Full steps (model download, China mirror acceleration) are in [docs/sherpa-adapter-zh.md](docs/sherpa-adapter-zh.md).
+
+**① One-time setup** — create a venv, install deps, download models:
+
+```powershell
+# Windows (PowerShell)
+git clone https://github.com/ruzhila/voiceapi
+cd voiceapi
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+```
+```bash
+# Linux / macOS (bash)
+git clone https://github.com/ruzhila/voiceapi
+cd voiceapi
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+> Then download the models into `voiceapi/models/` (in mainland China prefix GitHub URLs with `https://ghfast.top/`). See [docs/sherpa-adapter-zh.md](docs/sherpa-adapter-zh.md).
+
+**② Every run — two terminals (both required):**
+
+**Terminal 1 — the sidecar** (keep it running; listens on `:8000`):
+
+```powershell
+# Windows (PowerShell)
+cd voiceapi
+.venv\Scripts\python app.py --asr-model zipformer-bilingual --threads 8
+```
+```bash
+# Linux / macOS (bash)
+cd voiceapi
+.venv/bin/python app.py --asr-model zipformer-bilingual --threads 8
+```
+
+**Terminal 2 — the kernel** (back in the project root; listens on `:8080`). Put `VOICESTREAM_CONFIG=configs/sherpa.yaml` in a `.env` at the project root (auto-loaded at startup) and both platforms just run `go run ./cmd/server`; or set the env var inline, per platform:
+
+```powershell
+# Windows (PowerShell) — note the `;`, not bash's inline prefix
+$env:VOICESTREAM_CONFIG = "configs/sherpa.yaml"; go run ./cmd/server
+```
+```bash
+# Linux / macOS (bash)
+VOICESTREAM_CONFIG=configs/sherpa.yaml go run ./cmd/server
+```
+
+Open `http://localhost:8080/` for **real ASR transcription → LLM reply → real TTS synthesis**, still interruptible.
+
+> **Dependency chain (remember this):** `browser ⇄ voicestream (:8080) ⇄ voiceapi (:8000) ⇄ sherpa-onnx models`. voiceapi must stay up the whole time — the sherpa adapter connects lazily *on first speech*, so the kernel starts fine, but if voiceapi isn't running you'll get `connection refused` the moment you talk. That error just means: go start Terminal 1.
+
+### 3 · Real LLM via any OpenAI-compatible endpoint
+
+The `openai-compat` adapter is ready (it's the default in `configs/sherpa.yaml`) — wiring it up is just supplying a key (**keys only via env var, never in files**):
+
+1. Confirm `llm: openai-compat` in `configs/sherpa.yaml` (default).
+2. Put the key in `.env` at the project root (auto-loaded): `VOICESTREAM_LLM_API_KEY=sk-...` (cloud key; for a local model use any non-empty value).
+3. Run (same as Terminal 2 above).
+
+The default `cloud_llm` points at DeepSeek (`deepseek-chat`); switch vendor/local by changing only `cloud_llm.base_url` + `model`:
+
+- **Cloud:** DeepSeek `https://api.deepseek.com/v1` · Qwen `https://dashscope.aliyuncs.com/compatible-mode/v1` · Kimi `https://api.moonshot.cn/v1`
+- **Local OSS:** Ollama `http://localhost:11434/v1`, vLLM, LM Studio (same adapter, no code change).
+
+A built-in **voice-assistant system prompt** keeps replies plain and spoken — no Markdown / emoji that TTS would read out literally. Override it via `cloud_llm.system_prompt`.
+
+Now you have the **real ASR → real LLM → real TTS** loop end to end, interruptible throughout.
+
+### 4 · Test & load
+
+```bash
+go test -race ./...                                             # full suite (race detector)
+go run ./cmd/loadgen -steps 50,100,200,400,800 -out docs/load   # reproduce the capacity curve
+```
+
+> **`.env` auto-load:** the server reads `.env` at the project root on startup (real env vars win). Template: [.env.example](.env.example). Putting `VOICESTREAM_CONFIG` and `VOICESTREAM_LLM_API_KEY` there avoids the cross-platform env-var syntax differences below.
+>
+> **Env-var syntax differs by shell:** PowerShell uses `$env:NAME = "value"` (separate from the command with `;`) — it does **not** accept bash's `NAME=value command` prefix. bash uses the `NAME=value command` prefix or `export`.
+>
+> **venv Python path:** Windows `.venv\Scripts\python`, Linux/macOS `.venv/bin/python`.
+
+## Benchmarks
+
+### Capacity curve (L2)
+
+![capacity curve](docs/assets/capacity-curve.svg)
+
+Flat across the plateau; at the knee the CPU wall hits first; past it the **dual backpressure sheds at ingress by design** — pressure propagates back along TTS → token → finals → ASR and shows up as *counted* ingress drops, not memory growth or a crash. Interactive version: `docs/load/capacity.html`; reproduce with `go run ./cmd/loadgen -h`.
+
+### Latency waterfall (L1)
+
+![waterfall](docs/assets/waterfall.svg)
+
+LLM and TTS bars overlap heavily by nature — that's the pipeline; the grey serial bar is the same three spans laid end to end. Interrupted turns are boxed in red with the kernel-cancel cost. Live version at `http://localhost:8080/dash.html` (SSE, pushed per turn).
+
+### channels vs lock-free ring (L3)
+
+![channels vs ring](docs/assets/bench-chan-vs-ring.svg)
+
+The ring isn't about raw throughput: drop-oldest is roughly on par — the real difference is the **atomicity of the eviction semantics** (a channel's `select` emulation doesn't hold under concurrency). An honest finding too: a ring *without* false-sharing padding is slower than a channel — a lock-free structure done wrong is worse than not doing it.
+
+## Design highlights
+
+- **Dual backpressure split by data semantics.** Audio edges (50 fps/stream) ride a lock-free SPSC ring with drop-oldest (dropping stale real-time audio is a feature); mid-stream text rides bounded blocking channels (text cannot drop). They meet at ingress: slow model → chained blocking → *counted* ingress drops, memory bounded by construction.
+- **Interruption is the control plane.** An inline energy VAD (inside the ingress read goroutine, preserving strict SPSC) drives a 4-state machine; `RESPONDING + speech_start` → sub-chain ctx cancel + in-flight flush. The cancel path bypasses any congested queue, so the 200 ms budget survives overload.
+- **Sessions decoupled from connections.** A monotonic epoch fences stale frames, a seq-watermark dedups replays (TCP ordering makes a reorder window unnecessary — honestly omitted), reconnect resumes mid-stream, idle reclaim is the backstop.
+- **Observability as backdrop.** Hand-rolled Prometheus text format (~150 lines, zero deps) and an SSE waterfall dashboard; first-response = model latency + kernel overhead, measured separately so the kernel is never credited with the model's cost.
+
+## Documentation
+
+> The in-depth design docs live under `docs/` and are written in **Chinese** (中文), per project convention; code identifiers, commands and spec terms stay in English.
+
+| Doc | Topic |
 |---|---|
-| `docs/M2-transport-design*.md` | 帧协议与 WS 传输 |
-| `docs/M3-ringbuf-design*.md` | Vyukov 槽序列 SPSC 环、drop-oldest 无竞争驱逐 |
-| `docs/M5-pipeline-design*.md` | 编排与双背压、延迟分解 |
-| `docs/M6-vad-bargein-design*.md` | 内联 VAD 与打断状态机 |
-| `docs/M8-session-design.md` | 会话生命周期、epoch、重放去重 |
-| `docs/M9-metrics-design.md` | 指标与瀑布仪表盘 |
-| `docs/M10-loadgen-design.md` | 负载 harness、容量曲线、撞墙归因 |
+| `docs/M2-transport-design*.md` | Frame protocol & WS transport |
+| `docs/M3-ringbuf-design*.md` | Vyukov slot-sequence SPSC ring, contention-free drop-oldest |
+| `docs/M5-pipeline-design*.md` | Orchestration, dual backpressure, latency decomposition |
+| `docs/M6-vad-bargein-design*.md` | Inline VAD & barge-in state machine |
+| `docs/M8-session-design.md` | Session lifecycle, epoch, replay dedup |
+| `docs/M9-metrics-design.md` | Metrics & waterfall dashboard |
+| `docs/M10-loadgen-design.md` | Load harness, capacity curve, wall attribution |
+| `docs/M11-bench-tuning-design.md` | channels vs ring benchmark, pprof zero-alloc iteration |
+| [`docs/sherpa-adapter-zh.md`](docs/sherpa-adapter-zh.md) | Wiring open-source sherpa-onnx ASR/TTS (sidecar + WS client) |
+| [`docs/protocol-spec-zh.md`](docs/protocol-spec-zh.md) | Wire protocol spec (WS frame layout + `.proto`) |
+| [`docs/ops-manual-zh.md`](docs/ops-manual-zh.md) | Deploy / run / metrics / load-test manual |
 
-完整提案/设计/规格/任务：`openspec/changes/streaming-multimodal-agent-engine/`。
+Getting started from zero: `docs/concepts-zh.md` (glossary) → `docs/study-guide-zh.md` (code reading order) → `docs/project-deep-dive-zh.md` (design rationale & trade-offs). Full proposal/design/spec/tasks: `openspec/changes/streaming-multimodal-agent-engine/`.
 
-## 范围（v1）
+## Scope (v1)
 
-WebSocket + PCM 16k/16-bit/mono；模型云优先（LLM 已接真实 SSE 流）。
-FFmpeg 编解码、gRPC/WebTransport 传输拆为未来独立 change。
+WebSocket + PCM 16 kHz / 16-bit / mono. Models are pluggable: **LLM** = any OpenAI-compatible SSE endpoint (cloud or local), **ASR/TTS** = open-source sherpa-onnx (local sidecar) — switched entirely by config, no kernel changes. FFmpeg transcoding and gRPC/WebTransport transport are deferred to future, separate changes.
+
+## License
+
+[MIT](LICENSE) © 2026 cuagain886

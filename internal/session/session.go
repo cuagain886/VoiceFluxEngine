@@ -16,6 +16,7 @@ import (
 
 	"voicestream/internal/adapter"
 	"voicestream/internal/pipeline"
+	"voicestream/internal/ringbuf"
 	"voicestream/internal/transport"
 	"voicestream/internal/transport/transportpb"
 	"voicestream/internal/vad"
@@ -42,6 +43,11 @@ type Session struct {
 
 	wire chan wireMsg // 会话生命周期的下行队列
 
+	// pool 是入口读侧缓冲池：readLoop 把上行 payload 读进池缓冲（唯一 Getter），
+	// 缓冲随帧穿过入口环，pipeline 的 runASRLoop 消费完后归还（唯一 Putter）。
+	// 单 Getter 由「读循环交接串行化」保证（见 attach 的 readExited 等待）。
+	pool *ringbuf.BufferPool
+
 	clockUs     atomic.Int64  // 下行采样时钟，已入队音频的微秒数
 	downlinkSeq atomic.Uint64 // 跨重连持续递增
 	uplinkFloor atomic.Uint64 // 已投递的最高上行 seq（去重水位）
@@ -60,20 +66,30 @@ type Session struct {
 // attachment 把一个连接在某个特定 epoch 上绑定到会话。一次接管会把上一个
 // 附着标记为 stale：任何仍从它到达的东西都被计数并丢弃，绝不投递进流水线。
 type attachment struct {
-	epoch  uint64
-	conn   transport.Conn
-	cancel context.CancelFunc
-	stale  atomic.Bool
-	done   chan struct{} // 读者与写者都退出后关闭
+	epoch      uint64
+	conn       transport.Conn
+	cancel     context.CancelFunc
+	stale      atomic.Bool
+	done       chan struct{} // 读者与写者都退出后关闭
+	readExited chan struct{} // 读循环退出后关闭：让接管者等旧读循环停妥再启新读循环（入口池单 Getter）
 
 	loops sync.WaitGroup
 }
 
 func newSession(m *Manager, id string) (*Session, error) {
+	// 入口池缓冲大小 = 单帧字节（16-bit 单声道）；容量给到入口环的两倍：环里在飞行
+	// 的帧（≤IngressCapacity）+ pump 手里的 1~2 帧 + readLoop 正在填的 1 帧仍有余量，
+	// 耗尽时 Get 回落到 make（计 Misses），过载优雅降级。
+	frameBytes := int(int64(m.cfg.Audio.SampleRate)*int64(m.cfg.Audio.FrameDuration)/int64(time.Second)) * 2
+	pool, err := ringbuf.NewBufferPool(2*m.cfg.RingBuf.IngressCapacity, frameBytes)
+	if err != nil {
+		return nil, fmt.Errorf("session: ingress pool: %w", err)
+	}
 	s := &Session{
 		id:   id,
 		mgr:  m,
 		wire: make(chan wireMsg, 256),
+		pool: pool,
 	}
 	s.touch()
 
@@ -81,6 +97,7 @@ func newSession(m *Manager, id string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("session: pipeline: %w", err)
 	}
+	p.SetIngressPool(pool)
 	s.pipe = p
 	s.ctrl = vad.NewController(m.cfg, nil, p, m.log)
 
@@ -128,11 +145,15 @@ func (s *Session) attach(conn transport.Conn, claimedEpoch uint64, ackDetail str
 		old.stale.Store(true)
 		old.cancel()
 		_ = old.conn.Close(transport.StatusGoingAway, "superseded by reconnect")
+		// 等旧读循环停妥再启新读循环：入口池的 Getter 必须始终唯一（其 free-ring 是
+		// SPSC）。旧读循环在 ctx 取消 / 连接关闭后随即退出，退出 defer 关闭 readExited，
+		// 该路径不取 s.mu，故此处持锁等待不会死锁。
+		<-old.readExited
 	}
 	s.epoch = claimedEpoch
 
 	ctx, cancel := context.WithCancel(s.runCtx)
-	att := &attachment{epoch: claimedEpoch, conn: conn, cancel: cancel, done: make(chan struct{})}
+	att := &attachment{epoch: claimedEpoch, conn: conn, cancel: cancel, done: make(chan struct{}), readExited: make(chan struct{})}
 	s.att = att
 
 	att.loops.Add(2)
@@ -191,26 +212,50 @@ func (s *Session) advanceFloor(seq uint64) bool {
 }
 
 // readLoop 是每附着的入口边缘：去重 + 内联 VAD + 流水线。
+//
+// 池化读：若连接实现 FramePooledReader（真实 WebSocket），就把 payload 读进池缓冲、
+// 绕开每帧 io.ReadAll；缓冲随 AUDIO 帧交给入口环（之后由 pump 归还池），readLoop 随即
+// 换一块新的。非 AUDIO 帧（控制面、重复帧、stale）不进环，缓冲留在 readLoop 手里复用，
+// 所以 readLoop 只 Get、从不 Put——池的单 Getter 不变量由此成立。不支持池化读的 Conn
+// （测试桩）回退到 ReadFrame，行为不变。
 func (s *Session) readLoop(ctx context.Context, att *attachment) {
 	defer att.loops.Done()
-	defer att.cancel() // 读者死亡也把写者一并停掉
+	defer att.cancel()          // 读者死亡也把写者一并停掉
+	defer close(att.readExited) // 通知接管者：本读循环已停妥，可启新读循环
+
+	pooled, _ := att.conn.(transport.FramePooledReader)
+	var buf []byte
+	if pooled != nil {
+		buf = s.pool.Get()
+	}
 	for {
-		f, err := att.conn.ReadFrame(ctx)
+		var (
+			f   transport.Frame
+			err error
+		)
+		if pooled != nil {
+			f, buf, err = pooled.ReadFrameInto(ctx, buf)
+		} else {
+			f, err = att.conn.ReadFrame(ctx)
+		}
 		if err != nil {
 			return
 		}
 		if att.stale.Load() {
 			s.staleFrames.Add(1)
-			continue
+			continue // 不进环，buf 复用
 		}
 		s.touch()
 		switch f.Type {
 		case transportpb.FrameType_FRAME_TYPE_AUDIO:
 			if !s.advanceFloor(f.Seq) {
 				s.dupFrames.Add(1)
-				continue
+				continue // 重复帧不进环，buf 复用
 			}
 			s.ctrl.Ingest(adapter.AudioFrame{PCM: f.Payload, TsUs: f.TsUs})
+			if pooled != nil {
+				buf = s.pool.Get() // 缓冲已随帧交给环/pump，换一块新的来读下一帧
+			}
 		case transportpb.FrameType_FRAME_TYPE_CONTROL:
 			var c transportpb.ControlPayload
 			if perr := proto.Unmarshal(f.Payload, &c); perr != nil {

@@ -39,6 +39,12 @@ type Pipeline struct {
 	ingress *edge // 传输 -> ASR
 	egress  *edge // TTS -> 传输
 
+	// ingressPool 是入口读侧的缓冲池（可空）。runASRLoop 消费完每帧后把缓冲
+	// 归还它，使上行热路径稳态零分配；空则退化为每帧落 GC（行为同旧版）。
+	// 池的 free-ring 是 SPSC：唯一 Putter 是 runASRLoop goroutine，唯一 Getter
+	// 是会话读 goroutine（会话层保证读循环交接串行化）。
+	ingressPool *ringbuf.BufferPool
+
 	endUtt  chan struct{} // 语句边界，latched（cap 1）
 	bargeIn chan struct{} // 响应取消请求，latched（cap 1）
 
@@ -95,8 +101,12 @@ func New(cfg config.Config, set adapter.Set, logger *slog.Logger) (*Pipeline, er
 	}, nil
 }
 
+// SetIngressPool 注入入口读侧缓冲池：runASRLoop 把消费完的帧缓冲归还它，使
+// 上行热路径稳态零分配。会话层在 New 之后调用；不设则退化为每帧落 GC（旧行为）。
+func (p *Pipeline) SetIngressPool(pool *ringbuf.BufferPool) { p.ingressPool = pool }
+
 // PushAudio 把一个上行帧投给入口环。它从不阻塞；drop-oldest 下永远成功
-//（可能驱逐一个过时帧）。单生产者：传输读 goroutine。
+// （可能驱逐一个过时帧）。单生产者：传输读 goroutine。
 func (p *Pipeline) PushAudio(f adapter.AudioFrame) bool { return p.ingress.push(f) }
 
 // AwaitDownlink 阻塞直到有合成帧可用或 ctx 结束。单消费者：传输写 goroutine。
@@ -215,7 +225,9 @@ type utterance struct {
 // 阻塞（编排器忙、finals 满）时，入口就开始卸载——这是设计使然。
 func (p *Pipeline) runASRLoop(ctx context.Context, finals chan<- utterance) error {
 	for ctx.Err() == nil {
-		in := make(chan adapter.AudioFrame, p.cfg.Pipeline.AudioChanCap)
+		// in 无缓冲：`in <- f` 返回即证明 ASR 已收到这帧、也就写完了上一帧，
+		// 于是 pump 可逐帧把上一帧的缓冲安全归还池（在飞行中的缓冲恒为 2 块）。
+		in := make(chan adapter.AudioFrame)
 		out := make(chan adapter.Transcript, p.cfg.Pipeline.AudioChanCap)
 
 		streamErr := make(chan error, 1)
@@ -240,8 +252,17 @@ func (p *Pipeline) runASRLoop(ctx context.Context, finals chan<- utterance) erro
 			}
 		}()
 
-		// 抽帧直到语句边界。
+		// 抽帧直到语句边界。每帧的缓冲在 ASR 用完后归还入口池：无缓冲 in 让
+		// `in <- f(N+1)` 的返回成为「ASR 已用完 f(N)」的信号，于是逐帧回收上一帧；
+		// 末帧在 ASR 流返回后回收。被 drop-oldest 在环里驱逐的帧不经过这里、落 GC。
 		var endAt time.Time
+		var prev adapter.AudioFrame
+		var havePrev bool
+		recycle := func(f adapter.AudioFrame) {
+			if p.ingressPool != nil {
+				p.ingressPool.Put(f.PCM)
+			}
+		}
 	pump:
 		for {
 			f, ok := p.ingress.pop()
@@ -260,12 +281,18 @@ func (p *Pipeline) runASRLoop(ctx context.Context, finals chan<- utterance) erro
 			}
 			select {
 			case in <- f:
+				if havePrev {
+					recycle(prev) // ASR 收到 f ⇒ 已写完 prev ⇒ prev 可归还
+				}
+				prev, havePrev = f, true
 			case <-p.endUtt:
 				// 边界在交接某帧时到达；这一帧属于 hangover 区音频，
-				// 刻意丢弃。
+				// 刻意丢弃——它没交给 ASR，缓冲立即归还。
 				endAt = time.Now()
+				recycle(f)
 				break pump
 			case <-ctx.Done():
+				recycle(f)
 				break pump
 			}
 		}
@@ -273,6 +300,9 @@ func (p *Pipeline) runASRLoop(ctx context.Context, finals chan<- utterance) erro
 		close(in)
 		err := <-streamErr
 		<-collected
+		if havePrev {
+			recycle(prev) // ASR 流已返回 ⇒ 最后交接的那帧确定用完
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

@@ -18,10 +18,17 @@ import (
 
 	// 自注册的适配器，可通过配置选用。
 	_ "voicestream/internal/adapter/openaicompat"
+	_ "voicestream/internal/adapter/openaitts"
+	_ "voicestream/internal/adapter/sherpa"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// 自动加载工作目录下的 .env（若存在），免去每次手动 source；真实环境变量优先。
+	if err := config.LoadDotEnv(".env"); err != nil {
+		logger.Warn("read .env", "err", err)
+	}
 
 	cfg := config.Default()
 	if path := os.Getenv("VOICESTREAM_CONFIG"); path != "" {

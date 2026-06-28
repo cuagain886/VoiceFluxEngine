@@ -49,6 +49,11 @@ type Turn struct {
 
 // ASR 消费一句话的 PCM 帧，产出增量转写。调用方关闭 in 来标记语句结束；
 // 适配器随后产出最终转写并返回。
+//
+// 缓冲所有权：从 in 收到的 AudioFrame.PCM 底层缓冲由内核拥有、来自缓冲池，只在
+// 「收到它的那次 recv 当下」有效。适配器必须同步用掉它（直接转发 / 拷贝走），
+// 绝不可跨下一次 recv 或 Stream 返回之后再引用——否则会读到已被复用的缓冲。
+// 现有 sherpa（收到即同步 Write）与 mock（只读 TsUs）实现均满足该约定。
 type ASR interface {
 	Stream(ctx context.Context, in <-chan AudioFrame, out chan<- Transcript) error
 }

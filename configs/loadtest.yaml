@@ -7,7 +7,7 @@ server:
 
 adapters:
   asr: mock
-  llm: mock
+  llm: openai-compat
   tts: mock
   mock:
     asr_final_delay: 60ms  # 停顿 -> final 转写
