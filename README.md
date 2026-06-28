@@ -28,6 +28,7 @@ ASR / LLM / TTS are pluggable tenants, *not* part of the kernel.
 - [What it proves](#what-it-proves)
 - [Features](#features)
 - [Quick start](#quick-start)
+- [Configuration](#configuration)
 - [Benchmarks](#benchmarks)
 - [Design highlights](#design-highlights)
 - [Documentation](#documentation)
@@ -58,7 +59,7 @@ VoiceFluxEngine is **only** that kernel. Models are tenants you plug in by confi
 
 - 🎙️ **Natural barge-in.** Inline energy VAD (inside the ingress read goroutine, keeping audio strictly SPSC) drives a 4-state machine; `RESPONDING + speech_start` cancels the response sub-chain and flushes in-flight audio. The cancel path never goes through a congested queue, so the 200 ms budget holds even under overload.
 - ⚖️ **Dual backpressure, split by data semantics.** High-rate audio edges (50 fps/stream) use a lock-free **SPSC ring with drop-oldest** — dropping stale real-time audio is a *feature*. Low-rate text uses **bounded blocking channels** — text must not drop. They converge at ingress: a slow model → chained blocking → *counted* ingress drops, with memory bounded by construction.
-- 🔌 **Model-agnostic adapters.** Swap ASR / LLM / TTS by config, no kernel changes. **LLM** = any OpenAI-compatible SSE endpoint (cloud or local); **ASR/TTS** = open-source sherpa-onnx (local sidecar) or built-in mocks.
+- 🔌 **Model-agnostic adapters.** Swap ASR / LLM / TTS by config, no kernel changes. **LLM** = any OpenAI-compatible SSE endpoint; **TTS** = sherpa-onnx *or* any OpenAI-compatible `/audio/speech` endpoint; **ASR** = sherpa-onnx — open-source local sidecars, with built-in mocks throughout. See [Configuration](#configuration).
 - 📊 **Observability as backdrop.** Hand-rolled Prometheus text format (~150 lines, zero deps) + an SSE latency-**waterfall** dashboard. First-response is decomposed into *model latency* + *kernel overhead* and measured separately — the kernel never takes credit for the model.
 - 🧪 **Load harness + capacity curve.** Ramp concurrent virtual sessions through the *real* hot path; find the knee and prove graceful degradation.
 - 🪶 **Zero-alloc audio hot path.** The SPSC ring and downlink encoder run at 0 allocs/op, enforced by test gates.
@@ -161,6 +162,42 @@ go run ./cmd/loadgen -steps 50,100,200,400,800 -out docs/load   # reproduce the 
 >
 > **venv Python path:** Windows `.venv\Scripts\python`, Linux/macOS `.venv/bin/python`.
 
+## Configuration
+
+Config resolves in this order, later wins: **built-in defaults → YAML file (`VOICESTREAM_CONFIG`) → env-var overrides**. With nothing set you get the all-mock default on `:8080`. Secrets are **never** read from files — only from env vars (auto-loaded from `.env`). The fully-annotated reference config is [configs/sherpa.yaml](configs/sherpa.yaml).
+
+**Pick your models by config — the kernel never changes.** Each stage names an adapter; each adapter reads its own block:
+
+| Stage | `adapters.*` | Options | Config block | Secret (env var) |
+|---|---|---|---|---|
+| **ASR** | `asr` | `mock` · `sherpa` | `adapters.sherpa` | — (local sidecar) |
+| **LLM** | `llm` | `mock` · `openai-compat` | `adapters.cloud_llm` | `VOICESTREAM_LLM_API_KEY` |
+| **TTS** | `tts` | `mock` · `sherpa` · `openai-tts` | `adapters.sherpa` / `adapters.openai_tts` | `VOICESTREAM_TTS_API_KEY` (cloud only) |
+
+Swapping a backend is a one-line edit. For example, cloud TTS via the generic `openai-tts` adapter (OpenAI, or any compatible `/audio/speech` proxy — kokoro, edge-tts, self-hosted):
+
+```yaml
+adapters:
+  tts: openai-tts            # the only kernel-visible change
+  openai_tts:
+    base_url: "https://api.openai.com/v1"
+    model: "tts-1"
+    voice: "alloy"
+    api_key_env: "VOICESTREAM_TTS_API_KEY"   # key lives in env, never in the file
+```
+
+> ⚠️ **16 kHz only (D11: no resampling in v1).** The endpoint must return raw 16-bit mono PCM at `audio.sample_rate`. Real OpenAI `pcm` is fixed at **24 kHz** — use a sample-rate-configurable compatible service, or set `audio.sample_rate: 24000`, otherwise pitch/speed will be wrong.
+
+**Environment variables** (all optional; put them in `.env` — template at [.env.example](.env.example)):
+
+| Var | Effect |
+|---|---|
+| `VOICESTREAM_CONFIG` | path to the YAML config; unset = built-in all-mock default |
+| `VOICESTREAM_LLM_API_KEY` | API key for the `openai-compat` LLM (name set by `cloud_llm.api_key_env`) |
+| `VOICESTREAM_TTS_API_KEY` | API key for the `openai-tts` TTS (name set by `openai_tts.api_key_env`) |
+| `VOICESTREAM_ADDR` | override the listen address (e.g. `:9090`) |
+| `VOICESTREAM_SAMPLE_RATE` | override the wire sample rate |
+
 ## Benchmarks
 
 ### Capacity curve (L2)
@@ -210,7 +247,7 @@ Getting started from zero: `docs/concepts-zh.md` (glossary) → `docs/study-guid
 
 ## Scope (v1)
 
-WebSocket + PCM 16 kHz / 16-bit / mono. Models are pluggable: **LLM** = any OpenAI-compatible SSE endpoint (cloud or local), **ASR/TTS** = open-source sherpa-onnx (local sidecar) — switched entirely by config, no kernel changes. FFmpeg transcoding and gRPC/WebTransport transport are deferred to future, separate changes.
+WebSocket + PCM 16 kHz / 16-bit / mono. Models are pluggable: **LLM** = any OpenAI-compatible SSE endpoint (cloud or local), **ASR** = open-source sherpa-onnx (local sidecar), **TTS** = sherpa-onnx or any OpenAI-compatible `/audio/speech` endpoint — switched entirely by config, no kernel changes. FFmpeg transcoding and gRPC/WebTransport transport are deferred to future, separate changes.
 
 ## License
 
